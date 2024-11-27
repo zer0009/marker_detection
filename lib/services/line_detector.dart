@@ -10,15 +10,18 @@ class LineDetector with ChangeNotifier {
   CameraController? _cameraController;
   bool isLeft = false;
   bool isRight = false;
+  bool isCentered = true;
+  double? currentDeviation;
   final AudioFeedback audioFeedback;
   final SettingsModel settings;
   bool _isProcessing = false;
   DateTime? _lastDetectionTime;
-  final Duration debounceDuration = Duration(milliseconds: 500); // 500ms debounce
+  final Duration debounceDuration = Duration(milliseconds: 100); // Reduced to 100ms
 
   LineDetector({required this.audioFeedback, required this.settings});
 
   CameraController? get cameraController => _cameraController;
+  double? get deviation => currentDeviation;
 
   Future<void> initializeCamera() async {
     try {
@@ -38,7 +41,6 @@ class LineDetector with ChangeNotifier {
       );
       
       await _cameraController!.initialize();
-      
       await _cameraController!.startImageStream(_processImage);
       notifyListeners();
     } catch (e) {
@@ -47,20 +49,14 @@ class LineDetector with ChangeNotifier {
   }
 
   void _processImage(CameraImage image) async {
-    if (_isProcessing) return;
-    
-    // Debounce to prevent processing too frequently
-    if (_lastDetectionTime != null) {
-      final difference = DateTime.now().difference(_lastDetectionTime!);
-      if (difference < debounceDuration) {
-        return;
-      }
+    if (_isProcessing || 
+        (_lastDetectionTime != null && 
+         DateTime.now().difference(_lastDetectionTime!) < debounceDuration)) {
+      return;
     }
 
     _isProcessing = true;
     _lastDetectionTime = DateTime.now();
-
-    print("Processing image: ${image.width}x${image.height}");
 
     try {
       img.Image? convertedImage = ImageProcessing.convertCameraImage(image);
@@ -69,41 +65,41 @@ class LineDetector with ChangeNotifier {
         return;
       }
 
-      int? linePosition = ImageProcessing.detectLine(convertedImage);
+      // Pass settings to detectLine
+      int? linePosition = ImageProcessing.detectLine(convertedImage, settings);
       if (linePosition != null) {
         double deviation = ImageProcessing.calculateDeviation(linePosition, convertedImage.width);
+        currentDeviation = deviation;
         
-        // Get sensitivity threshold (normalized to match deviation scale)
-        double sensitivity = settings.sensitivity / 2; // Adjust sensitivity scale
+        // Get sensitivity threshold from settings
+        double sensitivity = (settings.sensitivity / 2).clamp(5.0, 50.0);
         
-        print('Processing - Deviation: $deviation, Sensitivity Threshold: $sensitivity');
-
+        print('Processing - Deviation: $deviation, Sensitivity: $sensitivity');
         bool shouldUpdateUI = false;
 
-        if (deviation < -sensitivity) {
-          // Significant left deviation
-          if (!isLeft) {
-            print('Detected LEFT deviation');
-            await audioFeedback.playLeftWarning();
-            isLeft = true;
-            isRight = false;
-            shouldUpdateUI = true;
-          }
-        } else if (deviation > sensitivity) {
-          // Significant right deviation
-          if (!isRight) {
-            print('Detected RIGHT deviation');
-            await audioFeedback.playRightWarning();
-            isRight = true;
-            isLeft = false;
+        // Update status based on deviation
+        if (deviation.abs() > sensitivity) {
+          bool newIsLeft = deviation < 0;
+          isCentered = false;
+          
+          if (newIsLeft != isLeft || (!newIsLeft && isRight != true)) {
+            isLeft = newIsLeft;
+            isRight = !newIsLeft;
+            
+            // Play appropriate audio feedback
+            if (isLeft) {
+              audioFeedback.playLeftWarning();
+            } else {
+              audioFeedback.playRightWarning();
+            }
             shouldUpdateUI = true;
           }
         } else {
-          // Centered
-          if (isLeft || isRight) {
-            print('Detected CENTER position');
+          // Line is centered
+          if (!isCentered || isLeft || isRight) {
             isLeft = false;
             isRight = false;
+            isCentered = true;
             shouldUpdateUI = true;
           }
         }
@@ -112,22 +108,27 @@ class LineDetector with ChangeNotifier {
           notifyListeners();
         }
       } else {
-        // If no line detected, reset indicators
-        if (isLeft || isRight) {
-          print('No line detected, resetting indicators');
+        // No line detected
+        if (isLeft || isRight || isCentered) {
           isLeft = false;
           isRight = false;
+          isCentered = false;
+          currentDeviation = null;
           notifyListeners();
         }
       }
     } catch (e) {
       print('Error in _processImage: $e');
+    } finally {
+      _isProcessing = false;
     }
-
-    _isProcessing = false;
   }
 
   Future<void> startDetection() async {
+    isLeft = false;
+    isRight = false;
+    isCentered = false;
+    currentDeviation = null;
     await initializeCamera();
   }
 
@@ -135,16 +136,24 @@ class LineDetector with ChangeNotifier {
     _cameraController?.stopImageStream();
     _cameraController?.dispose();
     _cameraController = null;
-    if (isLeft || isRight) {
-      isLeft = false;
-      isRight = false;
-      notifyListeners();
-    }
+    isLeft = false;
+    isRight = false;
+    isCentered = false;
+    currentDeviation = null;
+    notifyListeners();
+  }
+
+  void pauseDetection() {
+    _cameraController?.stopImageStream();
+  }
+
+  void resumeDetection() {
+    _cameraController?.startImageStream(_processImage);
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
+    stopDetection();
     super.dispose();
   }
 }

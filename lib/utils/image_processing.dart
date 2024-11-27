@@ -1,8 +1,12 @@
 // lib/utils/image_processing.dart
 import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import 'package:flutter/material.dart';
+
+import '../models/settings_model.dart';
 
 class ImageProcessing {
   /// Converts CameraImage to [img.Image]
@@ -66,24 +70,32 @@ class ImageProcessing {
 
   /// Adaptive Thresholding
   static img.Image adaptiveThreshold(img.Image src, int threshold) {
-    int windowSize = 15;
+    int windowSize = 11;
     img.Image thresholded = img.Image.from(src);
-    for (int y = 0; y < src.height; y++) {
+    
+    // Only process the lower third of the image
+    int startY = (src.height * 2) ~/ 3;
+    
+    for (int y = startY; y < src.height; y++) {
       for (int x = 0; x < src.width; x++) {
+        // Simplified local thresholding
         int sum = 0;
         int count = 0;
-        for (int ky = -windowSize ~/ 2; ky <= windowSize ~/ 2; ky++) {
-          for (int kx = -windowSize ~/ 2; kx <= windowSize ~/ 2; kx++) {
+        
+        // Reduced window sampling
+        for (int ky = -windowSize ~/ 2; ky <= windowSize ~/ 2; ky += 2) {
+          for (int kx = -windowSize ~/ 2; kx <= windowSize ~/ 2; kx += 2) {
             int ny = y + ky;
             int nx = x + kx;
-            if (nx >= 0 && nx < src.width && ny >= 0 && ny < src.height) {
+            if (nx >= 0 && nx < src.width && ny >= startY && ny < src.height) {
               sum += getLuminance(src.getPixel(nx, ny) as img.Pixel);
               count++;
             }
           }
         }
+        
         int localThreshold = (sum / count).round();
-        if (getLuminance(src.getPixel(x, y) as img.Pixel) < localThreshold) {
+        if (getLuminance(src.getPixel(x, y) as img.Pixel) < localThreshold - 5) {
           thresholded.setPixelRgba(x, y, 0, 0, 0, 255);
         } else {
           thresholded.setPixelRgba(x, y, 255, 255, 255, 255);
@@ -93,73 +105,112 @@ class ImageProcessing {
     return thresholded;
   }
 
+  /// Add class-level constants for tuning
+  static const int MIN_LINE_WIDTH = 15;  // Reduced minimum width
+  static const int MIN_BLACK_PIXELS = 3;  // Reduced minimum black pixels
+  static const double LUMINANCE_THRESHOLD = 120.0;  // Adjusted threshold
+  static const int SCAN_LINES = 30;  // Increased number of scan lines
+  
+  // Add tracking for previous position
+  static int? _previousCenterX;
+  static DateTime _lastPositionUpdate = DateTime.now();
+  static const int POSITION_RESET_MS = 1000; // Reset previous position after 1 second
+
   /// Detects the center X position of the line in the image
-  static int? detectLine(img.Image image) {
+  static int? detectLine(img.Image image, SettingsModel settings) {
     try {
-      // Convert to grayscale
-      img.Image grayscale = img.grayscale(image);
+      int width = image.width;
+      int height = image.height;
+      int startY = (height * 1) ~/ 2;
+      List<int> centerPoints = [];
+      
+      int scanStep = (height - startY) ~/ settings.scanLines;
+      scanStep = scanStep.clamp(1, 5);
+      
+      // Reset previous position if too old
+      if (DateTime.now().difference(_lastPositionUpdate).inMilliseconds > POSITION_RESET_MS) {
+        _previousCenterX = null;
+      }
 
-      // Apply adaptive thresholding for better contrast with various line colors
-      img.Image binary = adaptiveThreshold(grayscale, 128);
-
-      // Apply Gaussian blur to reduce noise
-      binary = img.gaussianBlur(binary, radius: 1);
-
-      // Focus on lower third of the image for better line detection
-      int width = binary.width;
-      int height = binary.height;
-      int startY = (height * 2) ~/ 3;
-      int sumX = 0;
-      int count = 0;
-
-      // Scan from bottom up
-      for (int y = height - 1; y >= startY; y--) {
-        int lineStartX = -1;
-        int lineEndX = -1;
-
-        // Scan each row for line segments
+      for (int y = height - 1; y >= startY; y -= scanStep) {
+        List<int> blackRuns = [];
+        int currentRun = 0;
+        int runStart = -1;
+        
+        // Scan each row with higher precision
         for (int x = 0; x < width; x++) {
-          final pixel = binary.getPixel(x, y) as img.Pixel;
+          final pixel = image.getPixel(x, y) as img.Pixel;
+          double luminance = getLuminance(pixel).toDouble();
           
-          // Detect black pixels as part of the line
-          if (getLuminance(pixel) < 128) {
-            if (lineStartX == -1) lineStartX = x;
-            lineEndX = x;
+          if (luminance < settings.luminanceThreshold) {
+            currentRun++;
+            if (runStart == -1) runStart = x;
+          } else {
+            if (currentRun >= settings.minLineWidth) {
+              int centerOfRun = runStart + (currentRun ~/ 2);
+              // Only add runs that are within reasonable distance of previous position
+              if (_previousCenterX == null || 
+                  (centerOfRun - _previousCenterX!).abs() < width ~/ 4) {
+                blackRuns.add(centerOfRun);
+              }
+            }
+            currentRun = 0;
+            runStart = -1;
           }
         }
-
-        // If we found a line segment in this row
-        if (lineStartX != -1 && lineEndX != -1) {
-          int centerOfLine = (lineStartX + lineEndX) ~/ 2;
-          sumX += centerOfLine;
-          count++;
-          print('Line segment found at y=$y: start=$lineStartX, end=$lineEndX, center=$centerOfLine');
+        
+        // Process the last run
+        if (currentRun >= settings.minLineWidth) {
+          int centerOfRun = runStart + (currentRun ~/ 2);
+          if (_previousCenterX == null || 
+              (centerOfRun - _previousCenterX!).abs() < width ~/ 4) {
+            blackRuns.add(centerOfRun);
+          }
         }
-
-        if (count >= 5) break;
+        
+        if (blackRuns.isNotEmpty) {
+          blackRuns.sort();
+          int medianCenter = blackRuns[blackRuns.length ~/ 2];
+          centerPoints.add(medianCenter);
+        }
       }
-
-      if (count == 0) {
-        print('No line detected');
-        return null;
+      
+      // Need at least 2 points to consider it a valid line
+      if (centerPoints.length < 2) {
+        return _previousCenterX;  // Return previous position if no new line detected
       }
-
-      int centerX = (sumX / count).round();
-      print('Final centerX: $centerX (averaged from $count points)');
-      return centerX;
+      
+      // Calculate new position
+      centerPoints.sort();
+      int newCenter = centerPoints[centerPoints.length ~/ 2];
+      
+      // Update tracking
+      _previousCenterX = newCenter;
+      _lastPositionUpdate = DateTime.now();
+      
+      return newCenter;
     } catch (e) {
       print('Error in detectLine: $e');
-      return null;
+      return _previousCenterX;
     }
   }
 
-  /// Calculates deviation from the center of the image
+  /// Enhanced deviation calculation with movement detection
   static double calculateDeviation(int centerX, int imageWidth) {
     double center = imageWidth / 2;
     double deviation = centerX - center;
-    // Normalize deviation to be between -100 and 100
-    deviation = (deviation / (imageWidth / 2)) * 100;
+    // More sensitive normalization
+    deviation = (deviation / (imageWidth / 3)) * 100;  // Increased sensitivity
+    deviation = deviation.clamp(-100.0, 100.0);  // Ensure within bounds
     print('Normalized deviation: $deviation');
     return deviation;
+  }
+
+  static double _getColorDifference(Color c1, Color c2) {
+    return sqrt(
+      pow(c1.red - c2.red, 2) +
+      pow(c1.green - c2.green, 2) +
+      pow(c1.blue - c2.blue, 2)
+    );
   }
 }

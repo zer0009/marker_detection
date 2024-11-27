@@ -3,28 +3,49 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsModel with ChangeNotifier {
-  double _sensitivity = 30.0; // Default sensitivity
+  double _sensitivity = 50;
+  int _minLineWidth = 15;
+  double _luminanceThreshold = 120;
+  int _scanLines = 30;
+  Color _lineColor = Colors.black;
+  bool _useAdaptiveThreshold = true;
 
+  // Getters
   double get sensitivity => _sensitivity;
+  int get minLineWidth => _minLineWidth;
+  double get luminanceThreshold => _luminanceThreshold;
+  int get scanLines => _scanLines;
+  Color get lineColor => _lineColor;
+  bool get useAdaptiveThreshold => _useAdaptiveThreshold;
 
-  SettingsModel() {
-    _loadSettings();
-  }
-
+  // Setters
   void setSensitivity(double value) {
     _sensitivity = value;
     notifyListeners();
-    _saveSettings();
   }
 
-  Future<void> _loadSettings() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    _sensitivity = prefs.getDouble('sensitivity') ?? 30.0;
+  void setMinLineWidth(int value) {
+    _minLineWidth = value;
     notifyListeners();
   }
 
-  Future<void> _saveSettings() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble('sensitivity', _sensitivity);
+  void setLuminanceThreshold(double value) {
+    _luminanceThreshold = value;
+    notifyListeners();
+  }
+
+  void setScanLines(int value) {
+    _scanLines = value;
+    notifyListeners();
+  }
+
+  void setLineColor(Color value) {
+    _lineColor = value;
+    notifyListeners();
+  }
+
+  void setUseAdaptiveThreshold(bool value) {
+    _useAdaptiveThreshold = value;
+    notifyListeners();
   }
 }
