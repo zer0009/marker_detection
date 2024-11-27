@@ -14,16 +14,27 @@ class AudioFeedback {
     _initializePlayer();
   }
 
-  void _initializeTTS() async {
-    await _flutterTts.setLanguage("en-US");
-    await _flutterTts.setSpeechRate(0.5);
-    await _flutterTts.setVolume(1.0);
-    await _flutterTts.setPitch(1.0);
+  Future<void> _initializeTTS() async {
+    try {
+      await _flutterTts.setLanguage("en-US");
+      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.setPitch(1.0);
+      print('TTS initialized successfully');
+    } catch (e) {
+      print('Error initializing TTS: $e');
+    }
   }
 
   Future<void> _initializePlayer() async {
-    await _player.openPlayer();
-    _isPlayerInitialized = true;
+    try {
+      await _player.openPlayer();
+      _isPlayerInitialized = true;
+      print('Sound player initialized successfully');
+    } catch (e) {
+      print('Error initializing sound player: $e');
+      _isPlayerInitialized = false;
+    }
   }
 
   Future<void> speakLeft() async {
@@ -35,38 +46,68 @@ class AudioFeedback {
   }
 
   Future<void> playLeftWarning() async {
-    if (_isPlayerInitialized) {
-      Uint8List audioData = await _loadAsset('assets/audio/left_warning.mp3');
+    if (!_isPlayerInitialized) {
+      print('Player not initialized, falling back to TTS');
+      return await speakLeft();
+    }
+
+    try {
+      final audioData = await _loadAsset('assets/audio/left_warning.mp3');
       await _player.startPlayer(
         fromDataBuffer: audioData,
         codec: Codec.mp3,
+        whenFinished: () {
+          print('Left warning sound completed');
+        },
       );
+    } catch (e) {
+      print('Error playing left warning sound: $e');
+      // Fallback to TTS if sound fails
+      await speakLeft();
     }
   }
 
   Future<void> playRightWarning() async {
-    if (_isPlayerInitialized) {
-      Uint8List audioData = await _loadAsset('assets/audio/right_warning.mp3');
+    if (!_isPlayerInitialized) {
+      print('Player not initialized, falling back to TTS');
+      return await speakRight();
+    }
+
+    try {
+      final audioData = await _loadAsset('assets/audio/right_warning.mp3');
       await _player.startPlayer(
         fromDataBuffer: audioData,
         codec: Codec.mp3,
+        whenFinished: () {
+          print('Right warning sound completed');
+        },
       );
+    } catch (e) {
+      print('Error playing right warning sound: $e');
+      // Fallback to TTS if sound fails
+      await speakRight();
     }
   }
 
   Future<Uint8List> _loadAsset(String path) async {
-    ByteData data = await rootBundle.load(path);
-    return data.buffer.asUint8List();
-  }
-
-  Future<void> stopPlayer() async {
-    if (_isPlayerInitialized) {
-      await _player.stopPlayer();
+    try {
+      final ByteData data = await rootBundle.load(path);
+      return data.buffer.asUint8List();
+    } catch (e) {
+      print('Error loading asset $path: $e');
+      throw Exception('Failed to load audio asset');
     }
   }
 
+  @override
   void dispose() {
-    _flutterTts.stop();
-    _player.closePlayer();
+    try {
+      _flutterTts.stop();
+      if (_isPlayerInitialized) {
+        _player.closePlayer();
+      }
+    } catch (e) {
+      print('Error disposing audio feedback: $e');
+    }
   }
 }

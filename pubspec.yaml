@@ -41,9 +41,13 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
-assets:
-  - assets/audio/left_warning.mp3
-  - assets/audio/right_warning.mp3
+flutter:
+  uses-material-design: true
+
+  # Add assets section here, under flutter:
+  assets:
+    - assets/audio/left_warning.mp3
+    - assets/audio/right_warning.mp3
 
 dev_dependencies:
   flutter_test:
@@ -59,13 +63,6 @@ dev_dependencies:
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
-# The following section is specific to Flutter packages.
-flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
-  uses-material-design: true
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
@@ -96,4 +93,3 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
-

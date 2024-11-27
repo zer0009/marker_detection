@@ -111,6 +111,14 @@ class LineDetector with ChangeNotifier {
         if (shouldUpdateUI) {
           notifyListeners();
         }
+      } else {
+        // If no line detected, reset indicators
+        if (isLeft || isRight) {
+          print('No line detected, resetting indicators');
+          isLeft = false;
+          isRight = false;
+          notifyListeners();
+        }
       }
     } catch (e) {
       print('Error in _processImage: $e');
@@ -127,9 +135,11 @@ class LineDetector with ChangeNotifier {
     _cameraController?.stopImageStream();
     _cameraController?.dispose();
     _cameraController = null;
-    isLeft = false;
-    isRight = false;
-    notifyListeners();
+    if (isLeft || isRight) {
+      isLeft = false;
+      isRight = false;
+      notifyListeners();
+    }
   }
 
   @override
