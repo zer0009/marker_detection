@@ -3,6 +3,8 @@ import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
 import '../services/line_detector.dart';
 import '../models/settings_model.dart';
+import '../widgets/line_follower_overlay.dart';
+import 'line_detection_overlay.dart';
 
 class CameraPreviewWidget extends StatelessWidget {
   const CameraPreviewWidget({Key? key}) : super(key: key);
@@ -18,34 +20,44 @@ class CameraPreviewWidget extends StatelessWidget {
     }
 
     return Stack(
+      fit: StackFit.expand,
       children: [
-        // Camera preview with correct aspect ratio
+        // Camera preview
         AspectRatio(
           aspectRatio: cameraController.value.aspectRatio,
           child: CameraPreview(cameraController),
         ),
         
         // Line detection overlay
-        AspectRatio(
-          aspectRatio: cameraController.value.aspectRatio,
-          child: CustomPaint(
-            painter: LineDetectionPainter(
+        if (settings.showLineHighlight)
+          Positioned.fill(
+            child: LineDetectionOverlay(
               deviation: lineDetector.deviation,
-              isLeft: lineDetector.isLeft,
-              isRight: lineDetector.isRight,
-              isCentered: lineDetector.isCentered,
-              sensitivity: settings.sensitivity,
+              isLineLost: lineDetector.isLineLost,
+              imageSize: Size(
+                MediaQuery.of(context).size.width,
+                MediaQuery.of(context).size.height,
+              ),
             ),
+          ),
+
+        // Line follower overlay
+        Positioned.fill(
+          child: LineFollowerOverlay(
+            deviation: lineDetector.deviation,
+            isLeft: lineDetector.isLeft,
+            isRight: lineDetector.isRight,
+            isCentered: lineDetector.isCentered,
           ),
         ),
 
-        // Debug info overlay
+        // Debug information
         if (settings.showDebugView)
           Positioned(
-            top: 20,
-            left: 20,
+            top: 10,
+            left: 10,
             child: Container(
-              padding: const EdgeInsets.all(8),
+              padding: EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: Colors.black54,
                 borderRadius: BorderRadius.circular(8),
@@ -54,14 +66,43 @@ class CameraPreviewWidget extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Deviation: ${lineDetector.deviation?.toStringAsFixed(1) ?? "N/A"}',
-                    style: const TextStyle(color: Colors.white),
+                    'Line Status: ${_getStatusText(lineDetector)}',
+                    style: TextStyle(
+                      color: _getStatusColor(lineDetector),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   Text(
-                    'Status: ${_getStatusText(lineDetector)}',
-                    style: const TextStyle(color: Colors.white),
+                    'Deviation: ${lineDetector.deviation?.toStringAsFixed(1) ?? "N/A"}',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  Text(
+                    'Confidence: ${_getConfidenceText(lineDetector)}',
+                    style: TextStyle(color: Colors.white),
                   ),
                 ],
+              ),
+            ),
+          ),
+
+        // Debug view image
+        if (settings.showDebugView && lineDetector.debugImageBytes != null)
+          Positioned(
+            top: 10,
+            right: 10,
+            child: Container(
+              width: 160,
+              height: 120,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.memory(
+                  lineDetector.debugImageBytes!,
+                  fit: BoxFit.cover,
+                ),
               ),
             ),
           ),
@@ -70,136 +111,22 @@ class CameraPreviewWidget extends StatelessWidget {
   }
 
   String _getStatusText(LineDetector detector) {
-    if (detector.isLeft) return 'Left';
-    if (detector.isRight) return 'Right';
-    if (detector.isCentered) return 'Centered';
-    return 'No Line';
-  }
-}
-
-class LineDetectionPainter extends CustomPainter {
-  final double? deviation;
-  final bool isLeft;
-  final bool isRight;
-  final bool isCentered;
-  final double sensitivity;
-
-  LineDetectionPainter({
-    required this.deviation,
-    required this.isLeft,
-    required this.isRight,
-    required this.isCentered,
-    required this.sensitivity,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..strokeWidth = 3.0;
-
-    // Draw center reference line
-    paint.color = Colors.green.withOpacity(0.3);
-    canvas.drawLine(
-      Offset(size.width / 2, 0),
-      Offset(size.width / 2, size.height),
-      paint,
-    );
-
-    // Draw sensitivity boundaries
-    double sensitivityWidth = (size.width * (sensitivity / 200)).clamp(
-      size.width * 0.05,
-      size.width * 0.5,
-    );
-    
-    paint.color = Colors.yellow.withOpacity(0.3);
-    // Left boundary
-    canvas.drawLine(
-      Offset(size.width / 2 - sensitivityWidth, 0),
-      Offset(size.width / 2 - sensitivityWidth, size.height),
-      paint,
-    );
-    // Right boundary
-    canvas.drawLine(
-      Offset(size.width / 2 + sensitivityWidth, 0),
-      Offset(size.width / 2 + sensitivityWidth, size.height),
-      paint,
-    );
-
-    // Draw detected line position
-    if (deviation != null) {
-      // Calculate position based on deviation
-      double linePosition = size.width / 2 + (deviation! * size.width / 100);
-      
-      // Draw detected line
-      paint
-        ..color = _getLineColor()
-        ..strokeWidth = 4.0;
-      
-      canvas.drawLine(
-        Offset(linePosition, 0),
-        Offset(linePosition, size.height),
-        paint,
-      );
-
-      // Draw arrow indicating direction to move
-      if (isLeft || isRight) {
-        _drawDirectionArrow(canvas, size, linePosition, paint);
-      }
-    }
-
-    // Draw target zone indicator
-    if (isCentered) {
-      paint
-        ..color = Colors.green
-        ..strokeWidth = 2.0
-        ..style = PaintingStyle.stroke;
-      
-      canvas.drawRect(
-        Rect.fromCenter(
-          center: Offset(size.width / 2, size.height / 2),
-          width: sensitivityWidth * 2,
-          height: 100,
-        ),
-        paint,
-      );
-    }
+    if (detector.isLineLost) return 'LINE LOST';
+    if (detector.isCentered) return 'CENTERED';
+    if (detector.isLeft) return 'LEFT';
+    if (detector.isRight) return 'RIGHT';
+    return 'SEARCHING';
   }
 
-  Color _getLineColor() {
-    if (isCentered) return Colors.green;
-    if (isLeft || isRight) return Colors.red;
-    return Colors.blue;
+  Color _getStatusColor(LineDetector detector) {
+    if (detector.isLineLost) return Colors.red;
+    if (detector.isCentered) return Colors.green;
+    return Colors.yellow;
   }
 
-  void _drawDirectionArrow(Canvas canvas, Size size, double linePosition, Paint paint) {
-    final arrowSize = size.width * 0.05;
-    final centerY = size.height / 2;
-    
-    Path path = Path();
-    if (isLeft) {
-      // Draw arrow pointing right
-      path.moveTo(linePosition + arrowSize, centerY);
-      path.lineTo(linePosition, centerY + arrowSize);
-      path.lineTo(linePosition, centerY - arrowSize);
-      path.close();
-    } else {
-      // Draw arrow pointing left
-      path.moveTo(linePosition - arrowSize, centerY);
-      path.lineTo(linePosition, centerY + arrowSize);
-      path.lineTo(linePosition, centerY - arrowSize);
-      path.close();
-    }
-    
-    paint.style = PaintingStyle.fill;
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(LineDetectionPainter oldDelegate) {
-    return oldDelegate.deviation != deviation ||
-           oldDelegate.isLeft != isLeft ||
-           oldDelegate.isRight != isRight ||
-           oldDelegate.isCentered != isCentered ||
-           oldDelegate.sensitivity != sensitivity;
+  String _getConfidenceText(LineDetector detector) {
+    if (detector.isStable) return 'HIGH';
+    if (detector.isLineLost) return 'LOST';
+    return 'MEDIUM';
   }
 }

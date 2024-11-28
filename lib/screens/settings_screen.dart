@@ -86,6 +86,24 @@ class SettingsScreen extends StatelessWidget {
                 value: settings.showDebugView,
                 onChanged: (value) => settings.setShowDebugView(value),
               ),
+              ListTile(
+                title: const Text('Contrast Enhancement'),
+                subtitle: Slider(
+                  value: settings.contrastEnhancement,
+                  min: 1.0,
+                  max: 2.0,
+                  divisions: 20,
+                  label: settings.contrastEnhancement.toStringAsFixed(1),
+                  onChanged: (value) => settings.setContrastEnhancement(value),
+                ),
+                trailing: Text(settings.contrastEnhancement.toStringAsFixed(1)),
+              ),
+              SwitchListTile(
+                title: const Text('Show Line Highlight'),
+                subtitle: const Text('Highlight detected line position'),
+                value: settings.showLineHighlight,
+                onChanged: (value) => settings.setShowLineHighlight(value),
+              ),
             ],
           ),
           _buildSection(

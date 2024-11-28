@@ -2,14 +2,16 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class SettingsModel with ChangeNotifier {
-  double _sensitivity = 50;
+class SettingsModel extends ChangeNotifier {
+  double _sensitivity = 30.0;
   int _minLineWidth = 15;
-  double _luminanceThreshold = 120;
+  double _luminanceThreshold = 80.0;
   int _scanLines = 30;
   Color _lineColor = Colors.black;
   bool _useAdaptiveThreshold = true;
-  bool _showDebugView = false;
+  bool _showDebugView = true;
+  bool _showLineHighlight = true;
+  double _contrastEnhancement = 1.5;
 
   // Getters
   double get sensitivity => _sensitivity;
@@ -19,10 +21,12 @@ class SettingsModel with ChangeNotifier {
   Color get lineColor => _lineColor;
   bool get useAdaptiveThreshold => _useAdaptiveThreshold;
   bool get showDebugView => _showDebugView;
+  bool get showLineHighlight => _showLineHighlight;
+  double get contrastEnhancement => _contrastEnhancement;
 
   // Setters
   void setSensitivity(double value) {
-    _sensitivity = value;
+    _sensitivity = value.clamp(10.0, 50.0);
     notifyListeners();
   }
 
@@ -53,6 +57,16 @@ class SettingsModel with ChangeNotifier {
 
   void setShowDebugView(bool value) {
     _showDebugView = value;
+    notifyListeners();
+  }
+
+  void setShowLineHighlight(bool value) {
+    _showLineHighlight = value;
+    notifyListeners();
+  }
+
+  void setContrastEnhancement(double value) {
+    _contrastEnhancement = value;
     notifyListeners();
   }
 }

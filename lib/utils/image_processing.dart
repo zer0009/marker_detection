@@ -60,7 +60,7 @@ class ImageProcessing {
 
   /// Updated Luminance calculation to accept [img.Pixel]
   static int getLuminance(img.Pixel pixel) {
-    // Extract RGB components and cast them to int
+    // Extract RGB components
     int r = pixel.r.toInt();
     int g = pixel.g.toInt();
     int b = pixel.b.toInt();
@@ -116,79 +116,86 @@ class ImageProcessing {
   static DateTime _lastPositionUpdate = DateTime.now();
   static const int POSITION_RESET_MS = 1000; // Reset previous position after 1 second
 
+  // Add new constants for line state tracking
+  static const int STABLE_LINE_THRESHOLD = 5; // Number of consistent readings for stable line
+  static const double RAPID_MOVEMENT_THRESHOLD = 30.0; // Deviation change threshold
+  static List<double> _recentDeviations = [];
+  static bool _isLineStable = false;
+
   /// Detects the center X position of the line in the image
   static int? detectLine(img.Image image, SettingsModel settings) {
     try {
-      int width = image.width;
-      int height = image.height;
-      int startY = (height * 1) ~/ 2;
-      List<int> centerPoints = [];
+      // Convert to grayscale and apply adaptive threshold
+      img.grayscale(image);
       
-      int scanStep = (height - startY) ~/ settings.scanLines;
-      scanStep = scanStep.clamp(1, 5);
+      // Focus on the bottom portion of the image where the line is most likely to be
+      int scanHeight = image.height ~/ 3;  // Bottom third of the image
+      int startY = image.height - scanHeight;
+      int endY = image.height;
       
-      // Reset previous position if too old
-      if (DateTime.now().difference(_lastPositionUpdate).inMilliseconds > POSITION_RESET_MS) {
-        _previousCenterX = null;
-      }
-
-      for (int y = height - 1; y >= startY; y -= scanStep) {
-        List<int> blackRuns = [];
-        int currentRun = 0;
-        int runStart = -1;
+      // Optimize scanning area width
+      int marginX = image.width ~/ 6;  // Ignore edges
+      int startX = marginX;
+      int endX = image.width - marginX;
+      
+      List<int> linePositions = [];
+      
+      // Scan lines from bottom to top with adaptive step size
+      for (int y = endY - 1; y >= startY; y -= 2) {
+        List<int> darkPixels = [];
+        int consecutiveDark = 0;
+        int darkStart = -1;
         
-        // Scan each row with higher precision
-        for (int x = 0; x < width; x++) {
-          final pixel = image.getPixel(x, y) as img.Pixel;
-          double luminance = getLuminance(pixel).toDouble();
+        // Scan each row for dark pixels
+        for (int x = startX; x < endX; x += 2) {
+          final pixel = image.getPixel(x, y);
+          int luminance = getLuminance(pixel);
           
-          if (luminance < settings.luminanceThreshold) {
-            currentRun++;
-            if (runStart == -1) runStart = x;
-          } else {
-            if (currentRun >= settings.minLineWidth) {
-              int centerOfRun = runStart + (currentRun ~/ 2);
-              // Only add runs that are within reasonable distance of previous position
-              if (_previousCenterX == null || 
-                  (centerOfRun - _previousCenterX!).abs() < width ~/ 4) {
-                blackRuns.add(centerOfRun);
-              }
+          if (luminance < LUMINANCE_THRESHOLD) {
+            if (darkStart == -1) darkStart = x;
+            consecutiveDark++;
+          } else if (consecutiveDark > 0) {
+            // Found a potential line segment
+            if (consecutiveDark >= MIN_BLACK_PIXELS) {
+              int center = darkStart + (consecutiveDark ~/ 2);
+              darkPixels.add(center);
             }
-            currentRun = 0;
-            runStart = -1;
+            consecutiveDark = 0;
+            darkStart = -1;
           }
         }
         
-        // Process the last run
-        if (currentRun >= settings.minLineWidth) {
-          int centerOfRun = runStart + (currentRun ~/ 2);
-          if (_previousCenterX == null || 
-              (centerOfRun - _previousCenterX!).abs() < width ~/ 4) {
-            blackRuns.add(centerOfRun);
-          }
-        }
-        
-        if (blackRuns.isNotEmpty) {
-          blackRuns.sort();
-          int medianCenter = blackRuns[blackRuns.length ~/ 2];
-          centerPoints.add(medianCenter);
+        // Process dark pixels in this row
+        if (darkPixels.isNotEmpty) {
+          // Use the median position if multiple dark regions found
+          darkPixels.sort();
+          int medianPos = darkPixels[darkPixels.length ~/ 2];
+          linePositions.add(medianPos);
         }
       }
       
-      // Need at least 2 points to consider it a valid line
-      if (centerPoints.length < 2) {
-        return _previousCenterX;  // Return previous position if no new line detected
+      // Process collected line positions
+      if (linePositions.isEmpty) return _previousCenterX;
+      
+      // Apply temporal smoothing
+      DateTime now = DateTime.now();
+      if (_previousCenterX != null && 
+          now.difference(_lastPositionUpdate).inMilliseconds < POSITION_RESET_MS) {
+        // Weight current and previous positions
+        linePositions.add(_previousCenterX!);
+        linePositions.add(_previousCenterX!);  // Add twice for more stability
       }
       
-      // Calculate new position
-      centerPoints.sort();
-      int newCenter = centerPoints[centerPoints.length ~/ 2];
+      // Calculate final position using median filtering
+      linePositions.sort();
+      int medianPosition = linePositions[linePositions.length ~/ 2];
       
-      // Update tracking
-      _previousCenterX = newCenter;
-      _lastPositionUpdate = DateTime.now();
+      // Update tracking variables
+      _previousCenterX = medianPosition;
+      _lastPositionUpdate = now;
       
-      return newCenter;
+      return medianPosition;
+      
     } catch (e) {
       print('Error in detectLine: $e');
       return _previousCenterX;
@@ -196,14 +203,26 @@ class ImageProcessing {
   }
 
   /// Enhanced deviation calculation with movement detection
-  static double calculateDeviation(int centerX, int imageWidth) {
+  static double calculateDeviation(int linePosition, int imageWidth) {
     double center = imageWidth / 2;
-    double deviation = centerX - center;
-    // More sensitive normalization
-    deviation = (deviation / (imageWidth / 3)) * 100;  // Increased sensitivity
-    deviation = deviation.clamp(-100.0, 100.0);  // Ensure within bounds
-    print('Normalized deviation: $deviation');
-    return deviation;
+    double currentDeviation = ((linePosition - center) / center * 100).clamp(-100.0, 100.0);
+    
+    // Track recent deviations for stability analysis
+    _recentDeviations.add(currentDeviation);
+    if (_recentDeviations.length > STABLE_LINE_THRESHOLD) {
+      _recentDeviations.removeAt(0);
+    }
+    
+    // Calculate line stability
+    if (_recentDeviations.length >= STABLE_LINE_THRESHOLD) {
+      double maxDiff = 0;
+      for (int i = 1; i < _recentDeviations.length; i++) {
+        maxDiff = max(maxDiff, (_recentDeviations[i] - _recentDeviations[i-1]).abs());
+      }
+      _isLineStable = maxDiff < RAPID_MOVEMENT_THRESHOLD;
+    }
+    
+    return currentDeviation;
   }
 
   static double _getColorDifference(Color c1, Color c2) {
@@ -212,5 +231,110 @@ class ImageProcessing {
       pow(c1.green - c2.green, 2) +
       pow(c1.blue - c2.blue, 2)
     );
+  }
+
+  static Future<Map<String, dynamic>?> processImageInIsolate(Map<String, dynamic> params) async {
+    try {
+      final CameraImage image = params['image'] as CameraImage;
+      final SettingsModel settings = params['settings'] as SettingsModel;
+
+      final convertedImage = ImageProcessing.convertCameraImage(image);
+      if (convertedImage == null) return null;
+
+      final linePosition = ImageProcessing.detectLine(convertedImage, settings);
+      if (linePosition == null) {
+        return {
+          'deviation': null,
+          'isLeft': false,
+          'isRight': false,
+          'isCentered': false,
+          'isLineLost': true,
+          'isStable': false,
+          'needsCorrection': false,
+          'debugImage': null,
+        };
+      }
+
+      final deviation = ImageProcessing.calculateDeviation(linePosition, convertedImage.width);
+      
+      // Enhanced state detection
+      bool isLeft = deviation < -settings.sensitivity / 2;
+      bool isRight = deviation > settings.sensitivity / 2;
+      bool isCentered = deviation.abs() <= settings.sensitivity / 2;
+      bool needsCorrection = deviation.abs() > settings.sensitivity * 0.75; // Urgent correction needed
+      
+      // Create debug image if needed
+      Uint8List? debugImage;
+      if (settings.showDebugView) {
+        debugImage = ImageProcessing.createDebugImage(
+          convertedImage,
+          linePosition,
+          deviation,
+          settings,
+        );
+      }
+
+      return {
+        'deviation': deviation,
+        'isLeft': isLeft,
+        'isRight': isRight,
+        'isCentered': isCentered,
+        'isLineLost': false,
+        'isStable': _isLineStable,
+        'needsCorrection': needsCorrection,
+        'debugImage': debugImage,
+      };
+    } catch (e) {
+      print('Error in processImageInIsolate: $e');
+      return null;
+    }
+  }
+
+  static Uint8List? createDebugImage(
+    img.Image sourceImage,
+    int linePosition,
+    double deviation,
+    SettingsModel settings,
+  ) {
+    try {
+      // Create a smaller debug image for better performance
+      img.Image debugImage = img.copyResize(sourceImage, width: 240);
+      
+      // Draw detected line position with improved visibility
+      int scaledPosition = (linePosition * debugImage.width) ~/ sourceImage.width;
+      for (int y = 0; y < debugImage.height; y++) {
+        // Thicker line with gradient effect
+        for (int x = -3; x <= 3; x++) {
+          if (scaledPosition + x >= 0 && scaledPosition + x < debugImage.width) {
+            int alpha = 255 - (x.abs() * 40);
+            debugImage.setPixelRgba(scaledPosition + x, y, 255, 0, 0, alpha);
+          }
+        }
+      }
+      
+      // Draw center and boundaries with improved visibility
+      int centerX = debugImage.width ~/ 2;
+      double sensitivity = (settings.sensitivity / 2).clamp(5.0, 50.0);
+      int zoneWidth = (debugImage.width * (sensitivity / 100)).round();
+      
+      // Draw zones with semi-transparent fills
+      for (int y = 0; y < debugImage.height; y++) {
+        // Left zone
+        for (int x = 0; x < centerX - zoneWidth; x++) {
+          debugImage.setPixelRgba(x, y, 255, 0, 0, 40);
+        }
+        // Right zone
+        for (int x = centerX + zoneWidth; x < debugImage.width; x++) {
+          debugImage.setPixelRgba(x, y, 255, 0, 0, 40);
+        }
+        // Center zone
+        debugImage.setPixelRgba(centerX, y, 0, 255, 0, 180);
+      }
+
+      return Uint8List.fromList(img.encodePng(debugImage));
+    } catch (e) {
+      print('Error creating debug image: $e');
+      return null;
+    }
   }
 }
