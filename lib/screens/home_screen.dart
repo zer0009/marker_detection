@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/line_detector.dart';
 import '../widgets/status_indicator.dart';
 import 'package:camera/camera.dart';
+import '../widgets/camera_preview_widget.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -53,11 +54,22 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Column(
         children: [
           Expanded(
-            child: cameraController != null && cameraController.value.isInitialized
-                ? CameraPreview(cameraController)
-                : const Center(child: Text("Camera not initialized")),
+            child: ClipRect(
+              child: OverflowBox(
+                alignment: Alignment.center,
+                child: FittedBox(
+                  fit: BoxFit.fitWidth,
+                  child: SizedBox(
+                    width: MediaQuery.of(context).size.width,
+                    height: MediaQuery.of(context).size.width * 
+                      (cameraController?.value.aspectRatio ?? 1.0),
+                    child: const CameraPreviewWidget(),
+                  ),
+                ),
+              ),
+            ),
           ),
-          StatusIndicator(isLeft: isLeft, isRight: isRight),
+          StatusIndicator(isLeft: isLeft, isRight: isRight, isCentered: true),
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: ElevatedButton(

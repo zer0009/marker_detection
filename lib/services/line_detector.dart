@@ -5,6 +5,8 @@ import 'package:image/image.dart' as img;
 import '../services/audio_feedback.dart';
 import '../utils/image_processing.dart';
 import '../models/settings_model.dart';
+import 'dart:ui';
+import 'dart:typed_data';
 
 class LineDetector with ChangeNotifier {
   CameraController? _cameraController;
@@ -17,11 +19,18 @@ class LineDetector with ChangeNotifier {
   bool _isProcessing = false;
   DateTime? _lastDetectionTime;
   final Duration debounceDuration = Duration(milliseconds: 100); // Reduced to 100ms
+  Uint8List? _debugImageBytes;
 
+  // Add movement threshold
+  static const double MOVEMENT_THRESHOLD = 0.3; // 30% of screen width
+  bool _isStable = true;
+  
   LineDetector({required this.audioFeedback, required this.settings});
 
   CameraController? get cameraController => _cameraController;
   double? get deviation => currentDeviation;
+  Uint8List? get debugImageBytes => _debugImageBytes;
+  bool get isStable => _isStable;
 
   Future<void> initializeCamera() async {
     try {
@@ -65,7 +74,37 @@ class LineDetector with ChangeNotifier {
         return;
       }
 
-      // Pass settings to detectLine
+      // Create debug visualization
+      if (settings.showDebugView) {
+        img.Image debugImage = img.copyResize(convertedImage, width: 320);
+        
+        // Draw center line (ideal position)
+        int centerX = debugImage.width ~/ 2;
+        for (int y = 0; y < debugImage.height; y++) {
+          debugImage.setPixelRgba(centerX, y, 0, 255, 0, 128); // Semi-transparent green
+        }
+        
+        // Draw detected line
+        int? linePosition = ImageProcessing.detectLine(convertedImage, settings);
+        if (linePosition != null) {
+          int scaledPosition = (linePosition * debugImage.width) ~/ convertedImage.width;
+          for (int y = 0; y < debugImage.height; y++) {
+            debugImage.setPixelRgba(scaledPosition, y, 255, 0, 0, 255); // Red
+          }
+          
+          // Draw deviation zone
+          double sensitivity = (settings.sensitivity / 2).clamp(5.0, 50.0);
+          int zoneWidth = (debugImage.width * (sensitivity / 100)).round();
+          for (int y = 0; y < debugImage.height; y++) {
+            debugImage.setPixelRgba(centerX - zoneWidth, y, 255, 255, 0, 128); // Yellow
+            debugImage.setPixelRgba(centerX + zoneWidth, y, 255, 255, 0, 128); // Yellow
+          }
+        }
+        
+        _debugImageBytes = Uint8List.fromList(img.encodePng(debugImage));
+        notifyListeners();
+      }
+
       int? linePosition = ImageProcessing.detectLine(convertedImage, settings);
       if (linePosition != null) {
         double deviation = ImageProcessing.calculateDeviation(linePosition, convertedImage.width);
@@ -74,34 +113,48 @@ class LineDetector with ChangeNotifier {
         // Get sensitivity threshold from settings
         double sensitivity = (settings.sensitivity / 2).clamp(5.0, 50.0);
         
-        print('Processing - Deviation: $deviation, Sensitivity: $sensitivity');
+        // Check if movement is too rapid
+        _isStable = deviation.abs() < MOVEMENT_THRESHOLD * convertedImage.width;
+        
         bool shouldUpdateUI = false;
 
-        // Update status based on deviation
-        if (deviation.abs() > sensitivity) {
-          bool newIsLeft = deviation < 0;
-          isCentered = false;
-          
-          if (newIsLeft != isLeft || (!newIsLeft && isRight != true)) {
-            isLeft = newIsLeft;
-            isRight = !newIsLeft;
+        if (_isStable) {
+          // Update status based on deviation
+          if (deviation.abs() > sensitivity) {
+            bool newIsLeft = deviation < 0;
+            isCentered = false;
             
-            // Play appropriate audio feedback
-            if (isLeft) {
-              audioFeedback.playLeftWarning();
-            } else {
-              audioFeedback.playRightWarning();
+            if (newIsLeft != isLeft || (!newIsLeft && isRight != true)) {
+              isLeft = newIsLeft;
+              isRight = !newIsLeft;
+              
+              // Play appropriate audio feedback with direction guidance
+              if (isLeft) {
+                audioFeedback.playLeftWarning();
+                if (deviation.abs() > sensitivity * 1.5) {
+                  audioFeedback.playMessage("Move right slowly");
+                }
+              } else {
+                audioFeedback.playRightWarning();
+                if (deviation.abs() > sensitivity * 1.5) {
+                  audioFeedback.playMessage("Move left slowly");
+                }
+              }
+              shouldUpdateUI = true;
             }
-            shouldUpdateUI = true;
+          } else {
+            // Line is centered
+            if (!isCentered || isLeft || isRight) {
+              isLeft = false;
+              isRight = false;
+              isCentered = true;
+              audioFeedback.playMessage("Centered");
+              shouldUpdateUI = true;
+            }
           }
         } else {
-          // Line is centered
-          if (!isCentered || isLeft || isRight) {
-            isLeft = false;
-            isRight = false;
-            isCentered = true;
-            shouldUpdateUI = true;
-          }
+          // Camera movement too rapid
+          audioFeedback.playMessage("Hold phone more steady");
         }
 
         if (shouldUpdateUI) {
@@ -114,6 +167,7 @@ class LineDetector with ChangeNotifier {
           isRight = false;
           isCentered = false;
           currentDeviation = null;
+          audioFeedback.playMessage("Line lost");
           notifyListeners();
         }
       }

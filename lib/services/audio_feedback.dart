@@ -1,111 +1,97 @@
 // lib/services/audio_feedback.dart
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:flutter/services.dart' show rootBundle;
-import 'dart:typed_data';
-import 'package:flutter_sound/flutter_sound.dart';
 
 class AudioFeedback {
   final FlutterTts _flutterTts = FlutterTts();
-  final FlutterSoundPlayer _player = FlutterSoundPlayer();
-  bool _isPlayerInitialized = false;
+  DateTime? _lastMessageTime;
+  static const messageCooldown = Duration(milliseconds: 2000);
+  bool _isSpeaking = false;
 
   AudioFeedback() {
     _initializeTTS();
-    _initializePlayer();
   }
 
   Future<void> _initializeTTS() async {
     try {
       await _flutterTts.setLanguage("en-US");
-      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.setSpeechRate(0.4);
       await _flutterTts.setVolume(1.0);
       await _flutterTts.setPitch(1.0);
+
+      _flutterTts.setCompletionHandler(() {
+        _isSpeaking = false;
+        print('TTS completed speaking');
+      });
+
       print('TTS initialized successfully');
     } catch (e) {
       print('Error initializing TTS: $e');
     }
   }
 
-  Future<void> _initializePlayer() async {
+  Future<void> playMessage(String message, {bool isWarning = false}) async {
     try {
-      await _player.openPlayer();
-      _isPlayerInitialized = true;
-      print('Sound player initialized successfully');
+      if (_isSpeaking || 
+          (_lastMessageTime != null && 
+           DateTime.now().difference(_lastMessageTime!) < messageCooldown)) {
+        return;
+      }
+
+      _isSpeaking = true;
+      _lastMessageTime = DateTime.now();
+      
+      await _flutterTts.stop();
+      
+      if (isWarning) {
+        await _flutterTts.setSpeechRate(0.45);
+        await _flutterTts.setPitch(1.1);
+      } else {
+        await _flutterTts.setSpeechRate(0.4);
+        await _flutterTts.setPitch(1.0);
+      }
+      
+      var result = await _flutterTts.speak(message);
+      if (result != 1) {
+        _isSpeaking = false;
+      }
     } catch (e) {
-      print('Error initializing sound player: $e');
-      _isPlayerInitialized = false;
+      print('Error in playMessage: $e');
+      _isSpeaking = false;
     }
-  }
-
-  Future<void> speakLeft() async {
-    await _flutterTts.speak("You are veering to the left.");
-  }
-
-  Future<void> speakRight() async {
-    await _flutterTts.speak("You are veering to the right.");
   }
 
   Future<void> playLeftWarning() async {
-    if (!_isPlayerInitialized) {
-      print('Player not initialized, falling back to TTS');
-      return await speakLeft();
-    }
-
-    try {
-      final audioData = await _loadAsset('assets/audio/left_warning.mp3');
-      await _player.startPlayer(
-        fromDataBuffer: audioData,
-        codec: Codec.mp3,
-        whenFinished: () {
-          print('Left warning sound completed');
-        },
-      );
-    } catch (e) {
-      print('Error playing left warning sound: $e');
-      // Fallback to TTS if sound fails
-      await speakLeft();
-    }
+    await playMessage("Move Right", isWarning: true);
   }
 
   Future<void> playRightWarning() async {
-    if (!_isPlayerInitialized) {
-      print('Player not initialized, falling back to TTS');
-      return await speakRight();
-    }
-
-    try {
-      final audioData = await _loadAsset('assets/audio/right_warning.mp3');
-      await _player.startPlayer(
-        fromDataBuffer: audioData,
-        codec: Codec.mp3,
-        whenFinished: () {
-          print('Right warning sound completed');
-        },
-      );
-    } catch (e) {
-      print('Error playing right warning sound: $e');
-      // Fallback to TTS if sound fails
-      await speakRight();
-    }
+    await playMessage("Move Left", isWarning: true);
   }
 
-  Future<Uint8List> _loadAsset(String path) async {
-    try {
-      final ByteData data = await rootBundle.load(path);
-      return data.buffer.asUint8List();
-    } catch (e) {
-      print('Error loading asset $path: $e');
-      throw Exception('Failed to load audio asset');
-    }
+  Future<void> playCentered() async {
+    await playMessage("On Track");
+  }
+
+  Future<void> playLineLost() async {
+    await playMessage("Stop, Line Lost", isWarning: true);
+  }
+
+  Future<void> playHoldSteady() async {
+    await playMessage("Hold Steady", isWarning: true);
+  }
+
+  Future<void> playStarting() async {
+    await playMessage("Starting Line Detection");
+  }
+
+  Future<void> playStopping() async {
+    await playMessage("Stopping");
   }
 
   @override
   void dispose() {
     try {
       _flutterTts.stop();
-      if (_isPlayerInitialized) {
-        _player.closePlayer();
-      }
     } catch (e) {
       print('Error disposing audio feedback: $e');
     }

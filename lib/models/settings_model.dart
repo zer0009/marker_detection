@@ -9,6 +9,7 @@ class SettingsModel with ChangeNotifier {
   int _scanLines = 30;
   Color _lineColor = Colors.black;
   bool _useAdaptiveThreshold = true;
+  bool _showDebugView = false;
 
   // Getters
   double get sensitivity => _sensitivity;
@@ -17,6 +18,7 @@ class SettingsModel with ChangeNotifier {
   int get scanLines => _scanLines;
   Color get lineColor => _lineColor;
   bool get useAdaptiveThreshold => _useAdaptiveThreshold;
+  bool get showDebugView => _showDebugView;
 
   // Setters
   void setSensitivity(double value) {
@@ -46,6 +48,11 @@ class SettingsModel with ChangeNotifier {
 
   void setUseAdaptiveThreshold(bool value) {
     _useAdaptiveThreshold = value;
+    notifyListeners();
+  }
+
+  void setShowDebugView(bool value) {
+    _showDebugView = value;
     notifyListeners();
   }
 }

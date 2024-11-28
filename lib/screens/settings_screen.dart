@@ -80,6 +80,12 @@ class SettingsScreen extends StatelessWidget {
                 value: settings.useAdaptiveThreshold,
                 onChanged: (value) => settings.setUseAdaptiveThreshold(value),
               ),
+              SwitchListTile(
+                title: const Text('Show Debug View'),
+                subtitle: const Text('Display line detection visualization'),
+                value: settings.showDebugView,
+                onChanged: (value) => settings.setShowDebugView(value),
+              ),
             ],
           ),
           _buildSection(
