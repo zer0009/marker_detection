@@ -9,6 +9,7 @@ import '../models/settings_model.dart';
 import 'dart:ui';
 import 'dart:typed_data';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 class LineDetector with ChangeNotifier {
   CameraController? _cameraController;
@@ -22,9 +23,9 @@ class LineDetector with ChangeNotifier {
   final AudioFeedback audioFeedback;
   final SettingsModel settings;
   bool _isProcessing = false;
-  
+
   // Optimization constants
-  static const processingInterval = Duration(milliseconds: 50); // 20 FPS
+  static const processingInterval = Duration(milliseconds: 40); // 25 FPS
   DateTime? _lastProcessingTime;
   Uint8List? _debugImageBytes;
 
@@ -32,6 +33,14 @@ class LineDetector with ChangeNotifier {
   static const int CONSECUTIVE_FRAMES_THRESHOLD = 3;
   int _consecutiveLineLostFrames = 0;
   int _consecutiveStableFrames = 0;
+
+  // Add new constants for improved detection
+  static const int STABLE_FRAMES_THRESHOLD = 4;
+  static const int LINE_LOST_THRESHOLD = 2;
+
+  // Add movement tracking
+  List<double> _recentDeviations = [];
+  static const int DEVIATION_HISTORY_SIZE = 5;
 
   LineDetector({required this.audioFeedback, required this.settings}) {
     // Initialize with starting message
@@ -49,14 +58,14 @@ class LineDetector with ChangeNotifier {
         print("No camera available");
         return;
       }
-      
+
       _cameraController = CameraController(
         cameras.first,
         ResolutionPreset.medium,
         imageFormatGroup: ImageFormatGroup.yuv420,
         enableAudio: false,
       );
-      
+
       await _cameraController!.initialize();
       await _cameraController!.startImageStream(_processImage);
       notifyListeners();
@@ -66,8 +75,8 @@ class LineDetector with ChangeNotifier {
   }
 
   void _processImage(CameraImage image) async {
-    if (_isProcessing || 
-        (_lastProcessingTime != null && 
+    if (_isProcessing ||
+        (_lastProcessingTime != null &&
          DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
       return;
     }
@@ -86,20 +95,31 @@ class LineDetector with ChangeNotifier {
         return;
       }
 
+      // Track deviation history
+      if (result['deviation'] != null) {
+        _recentDeviations.add(result['deviation']);
+        if (_recentDeviations.length > DEVIATION_HISTORY_SIZE) {
+          _recentDeviations.removeAt(0);
+        }
+      }
+
+      // Enhanced stability detection
+      bool isStable = _checkStability();
+
       // Update state with detection results
       currentDeviation = result['deviation'];
       isLeft = result['isLeft'];
       isRight = result['isRight'];
       isCentered = result['isCentered'];
       isLineLost = result['isLineLost'];
-      isStable = result['isStable'];
+      this.isStable = isStable;
       needsCorrection = result['needsCorrection'];
       _debugImageBytes = result['debugImage'];
 
-      // Handle line tracking
+      // Enhanced line tracking
       if (isLineLost) {
         _consecutiveLineLostFrames++;
-        if (_consecutiveLineLostFrames >= CONSECUTIVE_FRAMES_THRESHOLD) {
+        if (_consecutiveLineLostFrames >= LINE_LOST_THRESHOLD) {
           _handleLineLost();
         }
       } else {
@@ -107,7 +127,6 @@ class LineDetector with ChangeNotifier {
         _handleLineDetected();
       }
 
-      // Provide audio feedback
       await audioFeedback.provideFeedback(
         isLeft: isLeft,
         isRight: isRight,
@@ -126,6 +145,22 @@ class LineDetector with ChangeNotifier {
     }
   }
 
+  bool _checkStability() {
+    if (_recentDeviations.length < 3) return false;
+
+    double sum = 0;
+    double maxDiff = 0;
+
+    for (int i = 1; i < _recentDeviations.length; i++) {
+      double diff = (_recentDeviations[i] - _recentDeviations[i-1]).abs();
+      maxDiff = math.max(maxDiff, diff);
+      sum += diff;
+    }
+
+    double avgDiff = sum / (_recentDeviations.length - 1);
+    return avgDiff < 5.0 && maxDiff < 10.0;
+  }
+
   void _handleLineLost() {
     isLineLost = true;
     isStable = false;
@@ -137,7 +172,7 @@ class LineDetector with ChangeNotifier {
     if (isStable) {
       _consecutiveStableFrames++;
       if (_consecutiveStableFrames >= CONSECUTIVE_FRAMES_THRESHOLD && isCentered) {
-        audioFeedback.playCentered();
+        print('centered');
       }
     } else {
       _consecutiveStableFrames = 0;

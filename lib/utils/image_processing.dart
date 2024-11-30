@@ -1,6 +1,6 @@
 // lib/utils/image_processing.dart
 import 'dart:typed_data';
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
@@ -9,6 +9,19 @@ import 'package:flutter/material.dart';
 import '../models/settings_model.dart';
 
 class ImageProcessing {
+  /// Calculates the deviation of the line from center as a percentage
+  static double calculateDeviation(int linePosition, int imageWidth) {
+    double center = imageWidth / 2;
+    double deviation = ((linePosition - center) / center) * 100;
+    return deviation.clamp(-100.0, 100.0); // Clamp to -100% to 100%
+  }
+
+  /// Gets the current line stability state
+  static bool get isLineStable => _isLineStable;
+
+  /// Gets the current confidence score
+  static double get confidenceScore => _lastConfidenceScore;
+
   /// Converts CameraImage to [img.Image]
   static img.Image? convertCameraImage(CameraImage image) {
     try {
@@ -72,16 +85,16 @@ class ImageProcessing {
   static img.Image adaptiveThreshold(img.Image src, int threshold) {
     int windowSize = 11;
     img.Image thresholded = img.Image.from(src);
-    
+
     // Only process the lower third of the image
     int startY = (src.height * 2) ~/ 3;
-    
+
     for (int y = startY; y < src.height; y++) {
       for (int x = 0; x < src.width; x++) {
         // Simplified local thresholding
         int sum = 0;
         int count = 0;
-        
+
         // Reduced window sampling
         for (int ky = -windowSize ~/ 2; ky <= windowSize ~/ 2; ky += 2) {
           for (int kx = -windowSize ~/ 2; kx <= windowSize ~/ 2; kx += 2) {
@@ -93,7 +106,7 @@ class ImageProcessing {
             }
           }
         }
-        
+
         int localThreshold = (sum / count).round();
         if (getLuminance(src.getPixel(x, y) as img.Pixel) < localThreshold - 5) {
           thresholded.setPixelRgba(x, y, 0, 0, 0, 255);
@@ -105,131 +118,323 @@ class ImageProcessing {
     return thresholded;
   }
 
-  /// Add class-level constants for tuning
-  static const int MIN_LINE_WIDTH = 15;  // Reduced minimum width
-  static const int MIN_BLACK_PIXELS = 3;  // Reduced minimum black pixels
-  static const double LUMINANCE_THRESHOLD = 120.0;  // Adjusted threshold
-  static const int SCAN_LINES = 30;  // Increased number of scan lines
-  
-  // Add tracking for previous position
-  static int? _previousCenterX;
-  static DateTime _lastPositionUpdate = DateTime.now();
-  static const int POSITION_RESET_MS = 1000; // Reset previous position after 1 second
+  // Optimized constants
+  static const int MIN_LINE_WIDTH = 2;
+  static const int MAX_LINE_WIDTH = 25;
+  static const double LUMINANCE_THRESHOLD = 85.0;
+  static const int SCAN_LINES = 60;  // Reduced scan lines
+  static const double CENTER_WEIGHT = 0.5;
+  static const int POSITION_RESET_MS = 250;
+  static const double EDGE_WEIGHT = 0.95;
+  static const int STABLE_LINE_THRESHOLD = 4;
+  static const double RAPID_MOVEMENT_THRESHOLD = 4.0;
+  static const int CONSECUTIVE_FRAMES_THRESHOLD = 2;
+  static const double LOCAL_CONTRAST_THRESHOLD = 0.80;
+  static const double GROUP_PROXIMITY_THRESHOLD = 0.025;
+  static const int MAX_HISTORY_SIZE = 3;  // Reduced history size
+  static const double SMOOTHING_FACTOR = 0.75;
+  static const double JUMP_THRESHOLD = 0.15;
 
-  // Add new constants for line state tracking
-  static const int STABLE_LINE_THRESHOLD = 5; // Number of consistent readings for stable line
-  static const double RAPID_MOVEMENT_THRESHOLD = 30.0; // Deviation change threshold
-  static List<double> _recentDeviations = [];
+  // Updated constants for better line detection
+  static const double CANNY_THRESHOLD_1 = 30.0;
+  static const double CANNY_THRESHOLD_2 = 90.0;
+  static const int GAUSSIAN_BLUR_SIZE = 3;
+  static const double MIN_LINE_LENGTH = 20.0;
+  static const double MAX_LINE_GAP = 5.0;
+  static const double MIN_SLOPE = 0.5;
+  static const double LANE_CENTER_THRESHOLD = 50.0;
+  static const int GUIDANCE_COOLDOWN = 3;
+
+  // Tracking variables
+  static String _lastGuidance = '';
+  static DateTime? _lastGuidanceTime;
   static bool _isLineStable = false;
+  static double _lastConfidenceScore = 0.0;
 
-  /// Detects the center X position of the line in the image
-  static int? detectLine(img.Image image, SettingsModel settings) {
+  /// Enhanced line detection with improved preprocessing
+  static Map<String, dynamic> detectLine(img.Image image, SettingsModel settings) {
     try {
-      // Convert to grayscale and apply adaptive threshold
-      img.grayscale(image);
+      // Reduce image size and convert to grayscale
+      var processImage = img.copyResize(
+        image,
+        width: image.width ~/ 2,
+        height: image.height ~/ 2,
+        interpolation: img.Interpolation.nearest
+      );
       
-      // Focus on the bottom portion of the image where the line is most likely to be
-      int scanHeight = image.height ~/ 3;  // Bottom third of the image
-      int startY = image.height - scanHeight;
-      int endY = image.height;
+      // Apply Gaussian blur
+      processImage = _applyGaussianBlur(processImage, GAUSSIAN_BLUR_SIZE);
       
-      // Optimize scanning area width
-      int marginX = image.width ~/ 6;  // Ignore edges
-      int startX = marginX;
-      int endX = image.width - marginX;
+      // Edge detection (Canny-like)
+      var edges = _detectEdges(processImage);
       
-      List<int> linePositions = [];
+      // Detect left and right lanes
+      var lanes = _detectLanes(edges);
       
-      // Scan lines from bottom to top with adaptive step size
-      for (int y = endY - 1; y >= startY; y -= 2) {
-        List<int> darkPixels = [];
-        int consecutiveDark = 0;
-        int darkStart = -1;
+      if (lanes == null || lanes['left'] == null || lanes['right'] == null) {
+        return _createEmptyResult();
+      }
+
+      // Calculate lane center and deviation
+      var deviation = _calculateLaneDeviation(
+        List<List<int>>.from(lanes['left']!), 
+        List<List<int>>.from(lanes['right']!), 
+        processImage.width
+      );
+
+      // Calculate guidance
+      var guidance = _calculateGuidance(deviation, settings);
+
+      // Create debug visualization if needed
+      Uint8List? debugImage;
+      if (settings.showDebugView) {
+        debugImage = createDebugImage(
+          image,
+          (processImage.width / 2 + deviation * processImage.width / 200).round(),
+          deviation,
+          settings,
+        );
+      }
+
+      return {
+        'deviation': deviation,
+        'isLeft': guidance['isLeft'],
+        'isRight': guidance['isRight'],
+        'isCentered': guidance['isCentered'],
+        'isLineLost': false,
+        'isStable': _isLineStable,
+        'needsCorrection': guidance['needsCorrection'],
+        'guidance': guidance['message'],
+        'debugImage': debugImage,
+      };
+
+    } catch (e) {
+      print('Error in detectLine: $e');
+      return _createEmptyResult();
+    }
+  }
+
+  /// Apply Gaussian blur
+  static img.Image _applyGaussianBlur(img.Image source, int kernelSize) {
+    var blurred = img.Image.from(source);
+    
+    for (int y = kernelSize ~/ 2; y < source.height - kernelSize ~/ 2; y++) {
+      for (int x = kernelSize ~/ 2; x < source.width - kernelSize ~/ 2; x++) {
+        var sum = 0;
+        var count = 0;
         
-        // Scan each row for dark pixels
-        for (int x = startX; x < endX; x += 2) {
-          final pixel = image.getPixel(x, y);
-          int luminance = getLuminance(pixel);
-          
-          if (luminance < LUMINANCE_THRESHOLD) {
-            if (darkStart == -1) darkStart = x;
-            consecutiveDark++;
-          } else if (consecutiveDark > 0) {
-            // Found a potential line segment
-            if (consecutiveDark >= MIN_BLACK_PIXELS) {
-              int center = darkStart + (consecutiveDark ~/ 2);
-              darkPixels.add(center);
-            }
-            consecutiveDark = 0;
-            darkStart = -1;
+        for (int ky = -kernelSize ~/ 2; ky <= kernelSize ~/ 2; ky++) {
+          for (int kx = -kernelSize ~/ 2; kx <= kernelSize ~/ 2; kx++) {
+            var pixel = source.getPixel(x + kx, y + ky);
+            sum += getLuminance(pixel);
+            count++;
           }
         }
         
-        // Process dark pixels in this row
-        if (darkPixels.isNotEmpty) {
-          // Use the median position if multiple dark regions found
-          darkPixels.sort();
-          int medianPos = darkPixels[darkPixels.length ~/ 2];
-          linePositions.add(medianPos);
-        }
+        var avg = (sum / count).round();
+        blurred.setPixelRgba(x, y, avg, avg, avg, 255);
       }
-      
-      // Process collected line positions
-      if (linePositions.isEmpty) return _previousCenterX;
-      
-      // Apply temporal smoothing
-      DateTime now = DateTime.now();
-      if (_previousCenterX != null && 
-          now.difference(_lastPositionUpdate).inMilliseconds < POSITION_RESET_MS) {
-        // Weight current and previous positions
-        linePositions.add(_previousCenterX!);
-        linePositions.add(_previousCenterX!);  // Add twice for more stability
-      }
-      
-      // Calculate final position using median filtering
-      linePositions.sort();
-      int medianPosition = linePositions[linePositions.length ~/ 2];
-      
-      // Update tracking variables
-      _previousCenterX = medianPosition;
-      _lastPositionUpdate = now;
-      
-      return medianPosition;
-      
-    } catch (e) {
-      print('Error in detectLine: $e');
-      return _previousCenterX;
     }
+    
+    return blurred;
   }
 
-  /// Enhanced deviation calculation with movement detection
-  static double calculateDeviation(int linePosition, int imageWidth) {
-    double center = imageWidth / 2;
-    double currentDeviation = ((linePosition - center) / center * 100).clamp(-100.0, 100.0);
-    
-    // Track recent deviations for stability analysis
-    _recentDeviations.add(currentDeviation);
-    if (_recentDeviations.length > STABLE_LINE_THRESHOLD) {
-      _recentDeviations.removeAt(0);
-    }
-    
-    // Calculate line stability
-    if (_recentDeviations.length >= STABLE_LINE_THRESHOLD) {
-      double maxDiff = 0;
-      for (int i = 1; i < _recentDeviations.length; i++) {
-        maxDiff = max(maxDiff, (_recentDeviations[i] - _recentDeviations[i-1]).abs());
+  /// Detect edges using gradient-based approach
+  static img.Image _detectEdges(img.Image source) {
+    var edges = img.Image(width: source.width, height: source.height);
+    int startY = (source.height * 2) ~/ 3;  // Only process lower third
+
+    for (int y = startY + 1; y < source.height - 1; y++) {
+      for (int x = 1; x < source.width - 1; x++) {
+        // Compute gradients
+        int gx = -getLuminance(source.getPixel(x-1, y)) + 
+                 getLuminance(source.getPixel(x+1, y));
+        int gy = -getLuminance(source.getPixel(x, y-1)) + 
+                 getLuminance(source.getPixel(x, y+1));
+        
+        double magnitude = math.sqrt(gx * gx + gy * gy);
+        
+        if (magnitude > CANNY_THRESHOLD_1 && magnitude < CANNY_THRESHOLD_2) {
+          edges.setPixelRgba(x, y, 255, 255, 255, 255);
+        } else {
+          edges.setPixelRgba(x, y, 0, 0, 0, 255);
+        }
       }
-      _isLineStable = maxDiff < RAPID_MOVEMENT_THRESHOLD;
     }
     
-    return currentDeviation;
+    return edges;
+  }
+
+  /// Detect left and right lanes using improved algorithm
+  static Map<String, List<List<int>>>? _detectLanes(img.Image edges) {
+    List<List<int>> lines = [];
+    int height = edges.height;
+    int width = edges.width;
+    int startY = (height * 2) ~/ 3;  // Focus on lower third
+    
+    // Parameters for line detection
+    const int MIN_LINE_PIXELS = 20;  // Minimum pixels to consider as line
+    const int MAX_GAP = 5;  // Maximum gap between line segments
+    
+    // Scan columns for vertical line segments
+    for (int x = 0; x < width; x++) {
+        int whitePixelCount = 0;
+        int currentGap = 0;
+        int lineStartY = -1;
+        
+        // Scan from bottom to top
+        for (int y = height - 1; y >= startY; y--) {
+            bool isWhite = getLuminance(edges.getPixel(x, y)) > 127;
+            
+            if (isWhite) {
+                whitePixelCount++;
+                currentGap = 0;
+                if (lineStartY == -1) lineStartY = y;
+            } else {
+                currentGap++;
+                
+                // If gap is too large, check if we found a valid line
+                if (currentGap > MAX_GAP) {
+                    if (whitePixelCount >= MIN_LINE_PIXELS) {
+                        lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
+                    }
+                    whitePixelCount = 0;
+                    lineStartY = -1;
+                }
+            }
+        }
+        
+        // Check for line at the end of column
+        if (whitePixelCount >= MIN_LINE_PIXELS) {
+            lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
+        }
+    }
+
+    if (lines.isEmpty) return null;
+
+    // Group lines into left and right sides
+    int centerX = width ~/ 2;
+    List<List<int>> leftLanes = [];
+    List<List<int>> rightLanes = [];
+    
+    // Find strongest lines on each side
+    for (var line in lines) {
+        int x = line[0];
+        int lineLength = line[3] - line[1];
+        
+        if (x < centerX - 10) {  // Left side
+            if (leftLanes.isEmpty || lineLength > leftLanes[0][3] - leftLanes[0][1]) {
+                leftLanes = [line];
+            }
+        } else if (x > centerX + 10) {  // Right side
+            if (rightLanes.isEmpty || lineLength > rightLanes[0][3] - rightLanes[0][1]) {
+                rightLanes = [line];
+            }
+        }
+    }
+
+    // Require both left and right lanes to be detected
+    if (leftLanes.isEmpty || rightLanes.isEmpty) return null;
+
+    return {
+        'left': leftLanes,
+        'right': rightLanes,
+    };
+  }
+
+  /// Calculate lane deviation
+  static double _calculateLaneDeviation(
+    List<List<int>> leftLanes,
+    List<List<int>> rightLanes,
+    int imageWidth
+  ) {
+    double leftX = 0, rightX = 0;
+    
+    for (var line in leftLanes) {
+      leftX += line[0];
+    }
+    for (var line in rightLanes) {
+      rightX += line[0];
+    }
+    
+    leftX /= leftLanes.length;
+    rightX /= rightLanes.length;
+    
+    double laneCenter = (leftX + rightX) / 2;
+    return calculateDeviation(laneCenter.round(), imageWidth);
+  }
+
+  static Map<String, dynamic> _calculateGuidance(double deviation, SettingsModel settings) {
+    if (_lastGuidanceTime != null && 
+        DateTime.now().difference(_lastGuidanceTime!).inSeconds < GUIDANCE_COOLDOWN) {
+      return _createGuidanceResult(_lastGuidance);
+    }
+
+    String message = '';
+    bool isLeft = deviation < -settings.sensitivity;
+    bool isRight = deviation > settings.sensitivity;
+    bool isCentered = deviation.abs() <= settings.sensitivity;
+    bool needsCorrection = deviation.abs() > settings.sensitivity * 1.5;
+
+    if (isCentered) {
+      message = "Centered";
+    } else if (isLeft) {
+      message = "Move right";
+    } else if (isRight) {
+      message = "Move left";
+    }
+
+    if (message != _lastGuidance) {
+      _lastGuidance = message;
+      _lastGuidanceTime = DateTime.now();
+    }
+
+    return {
+      'message': message,
+      'isLeft': isLeft,
+      'isRight': isRight,
+      'isCentered': isCentered,
+      'needsCorrection': needsCorrection,
+    };
+  }
+
+  static Map<String, dynamic> _createEmptyResult() {
+    return {
+      'deviation': null,
+      'isLeft': false,
+      'isRight': false,
+      'isCentered': false,
+      'isLineLost': true,
+      'isStable': false,
+      'needsCorrection': false,
+      'guidance': '',
+      'debugImage': null,
+    };
+  }
+
+  static Map<String, dynamic> _createGuidanceResult(String lastGuidance) {
+    return {
+      'message': lastGuidance,
+      'isLeft': lastGuidance == "Move right",
+      'isRight': lastGuidance == "Move left",
+      'isCentered': lastGuidance == "Centered",
+      'needsCorrection': lastGuidance != "Centered",
+    };
+  }
+
+  /// Reset tracking variables
+  static void reset() {
+    _lastGuidance = '';
+    _lastGuidanceTime = null;
+    _isLineStable = false;
+    _lastConfidenceScore = 0.0;
   }
 
   static double _getColorDifference(Color c1, Color c2) {
-    return sqrt(
-      pow(c1.red - c2.red, 2) +
-      pow(c1.green - c2.green, 2) +
-      pow(c1.blue - c2.blue, 2)
+    return math.sqrt(
+        math.pow(c1.red - c2.red, 2) +
+            math.pow(c1.green - c2.green, 2) +
+            math.pow(c1.blue - c2.blue, 2)
     );
   }
 
@@ -241,49 +446,12 @@ class ImageProcessing {
       final convertedImage = ImageProcessing.convertCameraImage(image);
       if (convertedImage == null) return null;
 
-      final linePosition = ImageProcessing.detectLine(convertedImage, settings);
-      if (linePosition == null) {
-        return {
-          'deviation': null,
-          'isLeft': false,
-          'isRight': false,
-          'isCentered': false,
-          'isLineLost': true,
-          'isStable': false,
-          'needsCorrection': false,
-          'debugImage': null,
-        };
-      }
-
-      final deviation = ImageProcessing.calculateDeviation(linePosition, convertedImage.width);
+      // Get the line detection result
+      final result = ImageProcessing.detectLine(convertedImage, settings);
       
-      // Enhanced state detection
-      bool isLeft = deviation < -settings.sensitivity / 2;
-      bool isRight = deviation > settings.sensitivity / 2;
-      bool isCentered = deviation.abs() <= settings.sensitivity / 2;
-      bool needsCorrection = deviation.abs() > settings.sensitivity * 0.75; // Urgent correction needed
-      
-      // Create debug image if needed
-      Uint8List? debugImage;
-      if (settings.showDebugView) {
-        debugImage = ImageProcessing.createDebugImage(
-          convertedImage,
-          linePosition,
-          deviation,
-          settings,
-        );
-      }
+      // The result already contains all the necessary information, just return it
+      return result;
 
-      return {
-        'deviation': deviation,
-        'isLeft': isLeft,
-        'isRight': isRight,
-        'isCentered': isCentered,
-        'isLineLost': false,
-        'isStable': _isLineStable,
-        'needsCorrection': needsCorrection,
-        'debugImage': debugImage,
-      };
     } catch (e) {
       print('Error in processImageInIsolate: $e');
       return null;
@@ -291,15 +459,15 @@ class ImageProcessing {
   }
 
   static Uint8List? createDebugImage(
-    img.Image sourceImage,
-    int linePosition,
-    double deviation,
-    SettingsModel settings,
-  ) {
+      img.Image sourceImage,
+      int linePosition,
+      double deviation,
+      SettingsModel settings,
+      ) {
     try {
       // Create a smaller debug image for better performance
       img.Image debugImage = img.copyResize(sourceImage, width: 240);
-      
+
       // Draw detected line position with improved visibility
       int scaledPosition = (linePosition * debugImage.width) ~/ sourceImage.width;
       for (int y = 0; y < debugImage.height; y++) {
@@ -311,12 +479,12 @@ class ImageProcessing {
           }
         }
       }
-      
+
       // Draw center and boundaries with improved visibility
       int centerX = debugImage.width ~/ 2;
       double sensitivity = (settings.sensitivity / 2).clamp(5.0, 50.0);
       int zoneWidth = (debugImage.width * (sensitivity / 100)).round();
-      
+
       // Draw zones with semi-transparent fills
       for (int y = 0; y < debugImage.height; y++) {
         // Left zone

@@ -8,8 +8,8 @@ class StatusIndicator extends StatelessWidget {
   final double? deviation;
 
   const StatusIndicator({
-    Key? key, 
-    required this.isLeft, 
+    Key? key,
+    required this.isLeft,
     required this.isRight,
     required this.isCentered,
     this.deviation,
