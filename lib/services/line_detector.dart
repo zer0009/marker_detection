@@ -77,7 +77,7 @@ class LineDetector with ChangeNotifier {
   void _processImage(CameraImage image) async {
     if (_isProcessing ||
         (_lastProcessingTime != null &&
-         DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
+            DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
       return;
     }
 
@@ -219,5 +219,26 @@ class LineDetector with ChangeNotifier {
     stopDetection();
     audioFeedback.dispose();
     super.dispose();
+  }
+
+  void updateDetection(CameraImage image, SettingsModel settings) async {
+    final result = await ImageProcessing.processImageInIsolate({
+      'image': image,
+      'settings': settings,
+    });
+
+    if (result != null) {
+      currentDeviation = result['deviation'];
+      isLeft = result['isLeft'];
+      isRight = result['isRight'];
+      isCentered = result['isCentered'];
+      isLineLost = result['isLineLost'];
+      _debugImageBytes = result['debugImage'];
+      notifyListeners();
+    } else {
+      // Handle null result
+      isLineLost = true;
+      notifyListeners();
+    }
   }
 }

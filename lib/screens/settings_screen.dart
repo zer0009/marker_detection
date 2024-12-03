@@ -45,6 +45,30 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 trailing: Text(settings.minLineWidth.toString()),
               ),
+              ListTile(
+                title: const Text('Canny Threshold 1'),
+                subtitle: Slider(
+                  value: settings.cannyThreshold1,
+                  min: 0,
+                  max: 255,
+                  divisions: 255,
+                  label: settings.cannyThreshold1.round().toString(),
+                  onChanged: (value) => settings.setCannyThreshold1(value),
+                ),
+                trailing: Text(settings.cannyThreshold1.round().toString()),
+              ),
+              ListTile(
+                title: const Text('Canny Threshold 2'),
+                subtitle: Slider(
+                  value: settings.cannyThreshold2,
+                  min: 0,
+                  max: 255,
+                  divisions: 255,
+                  label: settings.cannyThreshold2.round().toString(),
+                  onChanged: (value) => settings.setCannyThreshold2(value),
+                ),
+                trailing: Text(settings.cannyThreshold2.round().toString()),
+              ),
             ],
           ),
           _buildSection(
@@ -67,12 +91,36 @@ class SettingsScreen extends StatelessWidget {
                 subtitle: Slider(
                   value: settings.scanLines.toDouble(),
                   min: 10,
-                  max: 50,
-                  divisions: 40,
+                  max: 60,
+                  divisions: 50,
                   label: settings.scanLines.toString(),
                   onChanged: (value) => settings.setScanLines(value.round()),
                 ),
                 trailing: Text(settings.scanLines.toString()),
+              ),
+              ListTile(
+                title: const Text('Gaussian Blur Size'),
+                subtitle: Slider(
+                  value: settings.gaussianBlurSize.toDouble(),
+                  min: 1,
+                  max: 10,
+                  divisions: 9,
+                  label: settings.gaussianBlurSize.toString(),
+                  onChanged: (value) => settings.setGaussianBlurSize(value.round()),
+                ),
+                trailing: Text(settings.gaussianBlurSize.toString()),
+              ),
+              ListTile(
+                title: const Text('Guidance Cooldown (seconds)'),
+                subtitle: Slider(
+                  value: settings.guidanceCooldown.toDouble(),
+                  min: 1,
+                  max: 10,
+                  divisions: 9,
+                  label: settings.guidanceCooldown.toString(),
+                  onChanged: (value) => settings.setGuidanceCooldown(value.round()),
+                ),
+                trailing: Text(settings.guidanceCooldown.toString()),
               ),
               SwitchListTile(
                 title: const Text('Use Adaptive Threshold'),
@@ -140,11 +188,23 @@ class SettingsScreen extends StatelessWidget {
                         SizedBox(height: 8),
                         Text('• Line Width: Minimum width of the line to detect'),
                         SizedBox(height: 8),
+                        Text('• Canny Thresholds: Define the lower and upper bounds for edge detection'),
+                        SizedBox(height: 8),
+                        Text('• Gaussian Blur Size: Determines the level of blur applied to the image'),
+                        SizedBox(height: 8),
+                        Text('• Guidance Cooldown: Time between guidance messages'),
+                        SizedBox(height: 8),
                         Text('• Luminance: Brightness threshold for line detection'),
                         SizedBox(height: 8),
                         Text('• Scan Lines: Number of scanning points for detection'),
                         SizedBox(height: 8),
                         Text('• Adaptive Threshold: Helps with varying lighting conditions'),
+                        SizedBox(height: 8),
+                        Text('• Contrast Enhancement: Enhances contrast in processed images'),
+                        SizedBox(height: 8),
+                        Text('• Show Debug View: Display line detection visualization'),
+                        SizedBox(height: 8),
+                        Text('• Show Line Highlight: Highlight detected line position'),
                       ],
                     ),
                   ),
@@ -157,12 +217,15 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  // Helper method to build sections
   Widget _buildSection(String title, List<Widget> children) {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8.0),
+      elevation: 2.0,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Section Header
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Text(
@@ -173,13 +236,16 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ),
+          // Section Content
           ...children,
         ],
       ),
     );
   }
 
+  // Method to display color picker dialog
   void _showColorPicker(BuildContext context, SettingsModel settings) {
+    Color tempColor = settings.lineColor;
     showDialog(
       context: context,
       builder: (BuildContext context) {
@@ -187,17 +253,25 @@ class SettingsScreen extends StatelessWidget {
           title: const Text('Pick Line Color'),
           content: SingleChildScrollView(
             child: ColorPicker(
-              pickerColor: settings.lineColor,
+              pickerColor: tempColor,
               onColorChanged: (Color color) {
-                settings.setLineColor(color);
+                tempColor = color;
               },
+              showLabel: true,
               pickerAreaHeightPercent: 0.8,
             ),
           ),
           actions: [
             TextButton(
-              child: const Text('Done'),
+              child: const Text('Cancel'),
               onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text('Done'),
+              onPressed: () {
+                settings.setLineColor(tempColor);
+                Navigator.of(context).pop();
+              },
             ),
           ],
         );

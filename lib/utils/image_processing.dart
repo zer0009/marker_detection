@@ -9,6 +9,12 @@ import 'package:flutter/material.dart';
 import '../models/settings_model.dart';
 
 class ImageProcessing {
+  // Tracking variables
+  static String _lastGuidance = '';
+  static DateTime? _lastGuidanceTime;
+  static bool _isLineStable = false;
+  static double _lastConfidenceScore = 0.0;
+
   /// Calculates the deviation of the line from center as a percentage
   static double calculateDeviation(int linePosition, int imageWidth) {
     double center = imageWidth / 2;
@@ -81,9 +87,9 @@ class ImageProcessing {
     return ((0.2126 * r) + (0.7152 * g) + (0.0722 * b)).round();
   }
 
-  /// Adaptive Thresholding
-  static img.Image adaptiveThreshold(img.Image src, int threshold) {
-    int windowSize = 11;
+  /// Adaptive Thresholding using dynamic settings
+  static img.Image adaptiveThreshold(img.Image src, SettingsModel settings) {
+    int windowSize = settings.scanLines; // Dynamic window size from settings
     img.Image thresholded = img.Image.from(src);
 
     // Only process the lower third of the image
@@ -95,7 +101,7 @@ class ImageProcessing {
         int sum = 0;
         int count = 0;
 
-        // Reduced window sampling
+        // Reduced window sampling based on settings
         for (int ky = -windowSize ~/ 2; ky <= windowSize ~/ 2; ky += 2) {
           for (int kx = -windowSize ~/ 2; kx <= windowSize ~/ 2; kx += 2) {
             int ny = y + ky;
@@ -118,39 +124,6 @@ class ImageProcessing {
     return thresholded;
   }
 
-  // Optimized constants
-  static const int MIN_LINE_WIDTH = 2;
-  static const int MAX_LINE_WIDTH = 25;
-  static const double LUMINANCE_THRESHOLD = 85.0;
-  static const int SCAN_LINES = 60;  // Reduced scan lines
-  static const double CENTER_WEIGHT = 0.5;
-  static const int POSITION_RESET_MS = 250;
-  static const double EDGE_WEIGHT = 0.95;
-  static const int STABLE_LINE_THRESHOLD = 4;
-  static const double RAPID_MOVEMENT_THRESHOLD = 4.0;
-  static const int CONSECUTIVE_FRAMES_THRESHOLD = 2;
-  static const double LOCAL_CONTRAST_THRESHOLD = 0.80;
-  static const double GROUP_PROXIMITY_THRESHOLD = 0.025;
-  static const int MAX_HISTORY_SIZE = 3;  // Reduced history size
-  static const double SMOOTHING_FACTOR = 0.75;
-  static const double JUMP_THRESHOLD = 0.15;
-
-  // Updated constants for better line detection
-  static const double CANNY_THRESHOLD_1 = 30.0;
-  static const double CANNY_THRESHOLD_2 = 90.0;
-  static const int GAUSSIAN_BLUR_SIZE = 3;
-  static const double MIN_LINE_LENGTH = 20.0;
-  static const double MAX_LINE_GAP = 5.0;
-  static const double MIN_SLOPE = 0.5;
-  static const double LANE_CENTER_THRESHOLD = 50.0;
-  static const int GUIDANCE_COOLDOWN = 3;
-
-  // Tracking variables
-  static String _lastGuidance = '';
-  static DateTime? _lastGuidanceTime;
-  static bool _isLineStable = false;
-  static double _lastConfidenceScore = 0.0;
-
   /// Enhanced line detection with improved preprocessing
   static Map<String, dynamic> detectLine(img.Image image, SettingsModel settings) {
     try {
@@ -159,27 +132,28 @@ class ImageProcessing {
         image,
         width: image.width ~/ 2,
         height: image.height ~/ 2,
-        interpolation: img.Interpolation.nearest
+        interpolation: img.Interpolation.nearest,
       );
-      
-      // Apply Gaussian blur
-      processImage = _applyGaussianBlur(processImage, GAUSSIAN_BLUR_SIZE);
-      
-      // Edge detection (Canny-like)
-      var edges = _detectEdges(processImage);
-      
-      // Detect left and right lanes
-      var lanes = _detectLanes(edges);
-      
+
+      // Apply Gaussian blur based on settings
+      processImage = _applyGaussianBlur(processImage, settings.gaussianBlurSize);
+
+      // Edge detection (Canny-like) using dynamic thresholds
+      var edges = _detectEdges(processImage, settings);
+
+      // Detect left and right lanes using dynamic minLineWidth
+      var lanes = _detectLanes(edges, settings);
+
       if (lanes == null || lanes['left'] == null || lanes['right'] == null) {
         return _createEmptyResult();
       }
 
       // Calculate lane center and deviation
       var deviation = _calculateLaneDeviation(
-        List<List<int>>.from(lanes['left']!), 
-        List<List<int>>.from(lanes['right']!), 
-        processImage.width
+        List<List<int>>.from(lanes['left']!),
+        List<List<int>>.from(lanes['right']!),
+        processImage.width,
+        settings,
       );
 
       // Calculate guidance
@@ -207,22 +181,21 @@ class ImageProcessing {
         'guidance': guidance['message'],
         'debugImage': debugImage,
       };
-
     } catch (e) {
       print('Error in detectLine: $e');
       return _createEmptyResult();
     }
   }
 
-  /// Apply Gaussian blur
+  /// Apply Gaussian blur using dynamic kernel size from settings
   static img.Image _applyGaussianBlur(img.Image source, int kernelSize) {
     var blurred = img.Image.from(source);
-    
+
     for (int y = kernelSize ~/ 2; y < source.height - kernelSize ~/ 2; y++) {
       for (int x = kernelSize ~/ 2; x < source.width - kernelSize ~/ 2; x++) {
         var sum = 0;
         var count = 0;
-        
+
         for (int ky = -kernelSize ~/ 2; ky <= kernelSize ~/ 2; ky++) {
           for (int kx = -kernelSize ~/ 2; kx <= kernelSize ~/ 2; kx++) {
             var pixel = source.getPixel(x + kx, y + ky);
@@ -230,84 +203,83 @@ class ImageProcessing {
             count++;
           }
         }
-        
+
         var avg = (sum / count).round();
         blurred.setPixelRgba(x, y, avg, avg, avg, 255);
       }
     }
-    
+
     return blurred;
   }
 
-  /// Detect edges using gradient-based approach
-  static img.Image _detectEdges(img.Image source) {
+  /// Detect edges using gradient-based approach with dynamic thresholds
+  static img.Image _detectEdges(img.Image source, SettingsModel settings) {
     var edges = img.Image(width: source.width, height: source.height);
-    int startY = (source.height * 2) ~/ 3;  // Only process lower third
+    int startY = (source.height * 2) ~/ 3; // Only process lower third
 
     for (int y = startY + 1; y < source.height - 1; y++) {
       for (int x = 1; x < source.width - 1; x++) {
         // Compute gradients
-        int gx = -getLuminance(source.getPixel(x-1, y)) + 
-                 getLuminance(source.getPixel(x+1, y));
-        int gy = -getLuminance(source.getPixel(x, y-1)) + 
-                 getLuminance(source.getPixel(x, y+1));
-        
+        int gx = -getLuminance(source.getPixel(x - 1, y)) +
+            getLuminance(source.getPixel(x + 1, y));
+        int gy = -getLuminance(source.getPixel(x, y - 1)) +
+            getLuminance(source.getPixel(x, y + 1));
+
         double magnitude = math.sqrt(gx * gx + gy * gy);
-        
-        if (magnitude > CANNY_THRESHOLD_1 && magnitude < CANNY_THRESHOLD_2) {
+
+        if (magnitude > settings.cannyThreshold1 && magnitude < settings.cannyThreshold2) {
           edges.setPixelRgba(x, y, 255, 255, 255, 255);
         } else {
           edges.setPixelRgba(x, y, 0, 0, 0, 255);
         }
       }
     }
-    
+
     return edges;
   }
 
-  /// Detect left and right lanes using improved algorithm
-  static Map<String, List<List<int>>>? _detectLanes(img.Image edges) {
+  /// Detect left and right lanes using improved algorithm with dynamic minLineWidth
+  static Map<String, List<List<int>>>? _detectLanes(img.Image edges, SettingsModel settings) {
     List<List<int>> lines = [];
     int height = edges.height;
     int width = edges.width;
-    int startY = (height * 2) ~/ 3;  // Focus on lower third
-    
-    // Parameters for line detection
-    const int MIN_LINE_PIXELS = 20;  // Minimum pixels to consider as line
-    const int MAX_GAP = 5;  // Maximum gap between line segments
-    
+    int startY = (height * 2) ~/ 3; // Focus on lower third
+
+    // Parameters for line detection from settings
+    const int MAX_GAP = 5; // Maximum gap between line segments
+
     // Scan columns for vertical line segments
     for (int x = 0; x < width; x++) {
-        int whitePixelCount = 0;
-        int currentGap = 0;
-        int lineStartY = -1;
-        
-        // Scan from bottom to top
-        for (int y = height - 1; y >= startY; y--) {
-            bool isWhite = getLuminance(edges.getPixel(x, y)) > 127;
-            
-            if (isWhite) {
-                whitePixelCount++;
-                currentGap = 0;
-                if (lineStartY == -1) lineStartY = y;
-            } else {
-                currentGap++;
-                
-                // If gap is too large, check if we found a valid line
-                if (currentGap > MAX_GAP) {
-                    if (whitePixelCount >= MIN_LINE_PIXELS) {
-                        lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
-                    }
-                    whitePixelCount = 0;
-                    lineStartY = -1;
-                }
+      int whitePixelCount = 0;
+      int currentGap = 0;
+      int lineStartY = -1;
+
+      // Scan from bottom to top
+      for (int y = height - 1; y >= startY; y--) {
+        bool isWhite = getLuminance(edges.getPixel(x, y)) > 127;
+
+        if (isWhite) {
+          whitePixelCount++;
+          currentGap = 0;
+          if (lineStartY == -1) lineStartY = y;
+        } else {
+          currentGap++;
+
+          // If gap is too large, check if we found a valid line
+          if (currentGap > MAX_GAP) {
+            if (whitePixelCount >= settings.minLineWidth) { // Dynamic minLineWidth
+              lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
             }
+            whitePixelCount = 0;
+            lineStartY = -1;
+          }
         }
-        
-        // Check for line at the end of column
-        if (whitePixelCount >= MIN_LINE_PIXELS) {
-            lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
-        }
+      }
+
+      // Check for line at the end of column
+      if (whitePixelCount >= settings.minLineWidth) { // Dynamic minLineWidth
+        lines.add([x, lineStartY - whitePixelCount + 1, x, lineStartY]);
+      }
     }
 
     if (lines.isEmpty) return null;
@@ -316,29 +288,29 @@ class ImageProcessing {
     int centerX = width ~/ 2;
     List<List<int>> leftLanes = [];
     List<List<int>> rightLanes = [];
-    
+
     // Find strongest lines on each side
     for (var line in lines) {
-        int x = line[0];
-        int lineLength = line[3] - line[1];
-        
-        if (x < centerX - 10) {  // Left side
-            if (leftLanes.isEmpty || lineLength > leftLanes[0][3] - leftLanes[0][1]) {
-                leftLanes = [line];
-            }
-        } else if (x > centerX + 10) {  // Right side
-            if (rightLanes.isEmpty || lineLength > rightLanes[0][3] - rightLanes[0][1]) {
-                rightLanes = [line];
-            }
+      int x = line[0];
+      int lineLength = line[3] - line[1];
+
+      if (x < centerX - 10) { // Left side
+        if (leftLanes.isEmpty || lineLength > leftLanes[0][3] - leftLanes[0][1]) {
+          leftLanes = [line];
         }
+      } else if (x > centerX + 10) { // Right side
+        if (rightLanes.isEmpty || lineLength > rightLanes[0][3] - rightLanes[0][1]) {
+          rightLanes = [line];
+        }
+      }
     }
 
     // Require both left and right lanes to be detected
     if (leftLanes.isEmpty || rightLanes.isEmpty) return null;
 
     return {
-        'left': leftLanes,
-        'right': rightLanes,
+      'left': leftLanes,
+      'right': rightLanes,
     };
   }
 
@@ -346,27 +318,29 @@ class ImageProcessing {
   static double _calculateLaneDeviation(
     List<List<int>> leftLanes,
     List<List<int>> rightLanes,
-    int imageWidth
+    int imageWidth,
+    SettingsModel settings,
   ) {
     double leftX = 0, rightX = 0;
-    
+
     for (var line in leftLanes) {
       leftX += line[0];
     }
     for (var line in rightLanes) {
       rightX += line[0];
     }
-    
+
     leftX /= leftLanes.length;
     rightX /= rightLanes.length;
-    
+
     double laneCenter = (leftX + rightX) / 2;
     return calculateDeviation(laneCenter.round(), imageWidth);
   }
 
+  /// Calculate guidance based on deviation and settings
   static Map<String, dynamic> _calculateGuidance(double deviation, SettingsModel settings) {
-    if (_lastGuidanceTime != null && 
-        DateTime.now().difference(_lastGuidanceTime!).inSeconds < GUIDANCE_COOLDOWN) {
+    if (_lastGuidanceTime != null &&
+        DateTime.now().difference(_lastGuidanceTime!).inSeconds < settings.guidanceCooldown) {
       return _createGuidanceResult(_lastGuidance);
     }
 
@@ -398,6 +372,7 @@ class ImageProcessing {
     };
   }
 
+  /// Create an empty result when no lines are detected
   static Map<String, dynamic> _createEmptyResult() {
     return {
       'deviation': null,
@@ -412,6 +387,7 @@ class ImageProcessing {
     };
   }
 
+  /// Create guidance result based on the last message
   static Map<String, dynamic> _createGuidanceResult(String lastGuidance) {
     return {
       'message': lastGuidance,
@@ -430,40 +406,42 @@ class ImageProcessing {
     _lastConfidenceScore = 0.0;
   }
 
+  /// Calculate color difference (unused in current context)
   static double _getColorDifference(Color c1, Color c2) {
     return math.sqrt(
-        math.pow(c1.red - c2.red, 2) +
-            math.pow(c1.green - c2.green, 2) +
-            math.pow(c1.blue - c2.blue, 2)
+      math.pow(c1.red - c2.red, 2) +
+          math.pow(c1.green - c2.green, 2) +
+          math.pow(c1.blue - c2.blue, 2),
     );
   }
 
+  /// Process image in isolate (if used)
   static Future<Map<String, dynamic>?> processImageInIsolate(Map<String, dynamic> params) async {
     try {
       final CameraImage image = params['image'] as CameraImage;
       final SettingsModel settings = params['settings'] as SettingsModel;
 
-      final convertedImage = ImageProcessing.convertCameraImage(image);
+      final convertedImage = convertCameraImage(image);
       if (convertedImage == null) return null;
 
       // Get the line detection result
-      final result = ImageProcessing.detectLine(convertedImage, settings);
-      
+      final result = detectLine(convertedImage, settings);
+
       // The result already contains all the necessary information, just return it
       return result;
-
     } catch (e) {
       print('Error in processImageInIsolate: $e');
       return null;
     }
   }
 
+  /// Create debug image for visualization
   static Uint8List? createDebugImage(
-      img.Image sourceImage,
-      int linePosition,
-      double deviation,
-      SettingsModel settings,
-      ) {
+    img.Image sourceImage,
+    int linePosition,
+    double deviation,
+    SettingsModel settings,
+  ) {
     try {
       // Create a smaller debug image for better performance
       img.Image debugImage = img.copyResize(sourceImage, width: 240);
