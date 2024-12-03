@@ -48,6 +48,8 @@ class CameraPreviewWidget extends StatelessWidget {
             isLeft: lineDetector.isLeft,
             isRight: lineDetector.isRight,
             isCentered: lineDetector.isCentered,
+            isLineVisible: lineDetector.isLineVisible,
+            linePosition: lineDetector.linePosition,
           ),
         ),
 
@@ -57,7 +59,7 @@ class CameraPreviewWidget extends StatelessWidget {
             top: 10,
             left: 10,
             child: Container(
-              padding: EdgeInsets.all(8),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: Colors.black54,
                 borderRadius: BorderRadius.circular(8),
@@ -73,12 +75,16 @@ class CameraPreviewWidget extends StatelessWidget {
                     ),
                   ),
                   Text(
+                    'Position: ${_getPositionText(lineDetector)}',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  Text(
                     'Deviation: ${lineDetector.deviation?.toStringAsFixed(1) ?? "N/A"}',
-                    style: TextStyle(color: Colors.white),
+                    style: const TextStyle(color: Colors.white),
                   ),
                   Text(
                     'Confidence: ${_getConfidenceText(lineDetector)}',
-                    style: TextStyle(color: Colors.white),
+                    style: const TextStyle(color: Colors.white),
                   ),
                 ],
               ),
@@ -116,6 +122,23 @@ class CameraPreviewWidget extends StatelessWidget {
     if (detector.isLeft) return 'LEFT';
     if (detector.isRight) return 'RIGHT';
     return 'SEARCHING';
+  }
+
+  String _getPositionText(LineDetector detector) {
+    switch (detector.linePosition) {
+      case LinePosition.none:
+        return 'No Line';
+      case LinePosition.enteringLeft:
+        return 'Entering Left';
+      case LinePosition.enteringRight:
+        return 'Entering Right';
+      case LinePosition.leavingLeft:
+        return 'Leaving Left';
+      case LinePosition.leavingRight:
+        return 'Leaving Right';
+      case LinePosition.visible:
+        return 'Visible';
+    }
   }
 
   Color _getStatusColor(LineDetector detector) {

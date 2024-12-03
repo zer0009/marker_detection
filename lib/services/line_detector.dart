@@ -11,6 +11,16 @@ import 'dart:typed_data';
 import 'dart:isolate';
 import 'dart:math' as math;
 
+// Define the enum outside the class
+enum LinePosition {
+  none,
+  enteringLeft,
+  enteringRight,
+  visible,
+  leavingLeft,
+  leavingRight
+}
+
 class LineDetector with ChangeNotifier {
   CameraController? _cameraController;
   bool isLeft = false;
@@ -25,7 +35,7 @@ class LineDetector with ChangeNotifier {
   bool _isProcessing = false;
 
   // Optimization constants
-  static const processingInterval = Duration(milliseconds: 40); // 25 FPS
+  static const processingInterval = Duration(milliseconds: 30); // Increased to ~33 FPS
   DateTime? _lastProcessingTime;
   Uint8List? _debugImageBytes;
 
@@ -35,12 +45,25 @@ class LineDetector with ChangeNotifier {
   int _consecutiveStableFrames = 0;
 
   // Add new constants for improved detection
-  static const int STABLE_FRAMES_THRESHOLD = 4;
-  static const int LINE_LOST_THRESHOLD = 2;
+  static const int STABLE_FRAMES_THRESHOLD = 3; // Reduced from 4
+  static const int LINE_LOST_THRESHOLD = 1; // Reduced from 2
 
   // Add movement tracking
   List<double> _recentDeviations = [];
   static const int DEVIATION_HISTORY_SIZE = 5;
+
+  // Add vibration thresholds
+  static const double VIBRATION_THRESHOLD = 5.0;
+  static const double STRONG_VIBRATION_THRESHOLD = 15.0;
+
+  // Add new states for line position tracking
+  bool isLineVisible = false;
+  LinePosition linePosition = LinePosition.none;
+  
+  // Add position tracking
+  double? _lastDeviation;
+  DateTime? _lastLineSeenTime;
+  static const lineTimeout = Duration(milliseconds: 500);
 
   LineDetector({required this.audioFeedback, required this.settings}) {
     // Initialize with starting message
@@ -75,9 +98,8 @@ class LineDetector with ChangeNotifier {
   }
 
   void _processImage(CameraImage image) async {
-    if (_isProcessing ||
-        (_lastProcessingTime != null &&
-            DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
+    if (_isProcessing || (_lastProcessingTime != null && 
+        DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
       return;
     }
 
@@ -90,58 +112,62 @@ class LineDetector with ChangeNotifier {
         'settings': settings,
       });
 
-      if (result == null) {
-        _handleLineLost();
-        return;
-      }
-
-      // Track deviation history
-      if (result['deviation'] != null) {
-        _recentDeviations.add(result['deviation']);
-        if (_recentDeviations.length > DEVIATION_HISTORY_SIZE) {
-          _recentDeviations.removeAt(0);
+      // Track line visibility changes
+      bool wasVisible = isLineVisible;
+      isLineVisible = result != null && !result['isLineLost'];
+      
+      if (isLineVisible) {
+        _lastLineSeenTime = DateTime.now();
+        _updateLinePosition(result!['deviation']);
+      } else if (wasVisible) {
+        // Line just disappeared - determine exit direction
+        if (_lastDeviation != null) {
+          linePosition = _lastDeviation! < 0 ? 
+              LinePosition.leavingLeft : 
+              LinePosition.leavingRight;
+          audioFeedback.playMessage(
+            "Line leaving to ${linePosition == LinePosition.leavingLeft ? 'left' : 'right'}"
+          );
         }
+      } else if (_lastLineSeenTime != null && 
+          DateTime.now().difference(_lastLineSeenTime!) > lineTimeout) {
+        // Line completely lost
+        linePosition = LinePosition.none;
+        audioFeedback.playLineLost();
       }
 
-      // Enhanced stability detection
-      bool isStable = _checkStability();
-
-      // Update state with detection results
-      currentDeviation = result['deviation'];
-      isLeft = result['isLeft'];
-      isRight = result['isRight'];
-      isCentered = result['isCentered'];
-      isLineLost = result['isLineLost'];
-      this.isStable = isStable;
-      needsCorrection = result['needsCorrection'];
-      _debugImageBytes = result['debugImage'];
-
-      // Enhanced line tracking
-      if (isLineLost) {
-        _consecutiveLineLostFrames++;
-        if (_consecutiveLineLostFrames >= LINE_LOST_THRESHOLD) {
-          _handleLineLost();
-        }
-      } else {
-        _consecutiveLineLostFrames = 0;
-        _handleLineDetected();
+      // Update other states
+      if (result != null) {
+        currentDeviation = result['deviation'];
+        _lastDeviation = currentDeviation;
+        isLeft = result['isLeft'];
+        isRight = result['isRight'];
+        isCentered = result['isCentered'];
+        isLineLost = result['isLineLost'];
+        this.isStable = _checkStability();
+        needsCorrection = result['needsCorrection'];
+        _debugImageBytes = result['debugImage'];
       }
-
-      await audioFeedback.provideFeedback(
-        isLeft: isLeft,
-        isRight: isRight,
-        isCentered: isCentered,
-        isLineLost: isLineLost,
-        isStable: isStable,
-        needsCorrection: needsCorrection,
-        deviation: currentDeviation,
-      );
 
       notifyListeners();
     } catch (e) {
       print('Error in _processImage: $e');
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  void _updateLinePosition(double deviation) {
+    if (_lastDeviation == null) {
+      // First detection - determine entry direction
+      linePosition = deviation < 0 ? 
+          LinePosition.enteringLeft : 
+          LinePosition.enteringRight;
+      audioFeedback.playMessage(
+        "Line detected from ${linePosition == LinePosition.enteringLeft ? 'left' : 'right'}"
+      );
+    } else {
+      linePosition = LinePosition.visible;
     }
   }
 
@@ -158,7 +184,8 @@ class LineDetector with ChangeNotifier {
     }
 
     double avgDiff = sum / (_recentDeviations.length - 1);
-    return avgDiff < 5.0 && maxDiff < 10.0;
+    // More strict stability requirements
+    return avgDiff < 3.0 && maxDiff < 7.0; // Reduced from 5.0 and 10.0
   }
 
   void _handleLineLost() {
@@ -171,11 +198,22 @@ class LineDetector with ChangeNotifier {
   void _handleLineDetected() {
     if (isStable) {
       _consecutiveStableFrames++;
-      if (_consecutiveStableFrames >= CONSECUTIVE_FRAMES_THRESHOLD && isCentered) {
-        print('centered');
+      if (_consecutiveStableFrames >= CONSECUTIVE_FRAMES_THRESHOLD) {
+        if (isCentered) {
+          // Provide positive feedback for staying centered
+          audioFeedback.playMessage("Good", isPositive: true);
+        }
       }
     } else {
       _consecutiveStableFrames = 0;
+      
+      // Add immediate feedback for sudden movements
+      if (currentDeviation != null && currentDeviation!.abs() > STRONG_VIBRATION_THRESHOLD) {
+        audioFeedback.playMessage(
+          "Too ${currentDeviation! < 0 ? 'right' : 'left'}",
+          isUrgent: true
+        );
+      }
     }
   }
 

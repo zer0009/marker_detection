@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import '../services/line_detector.dart';
 
 class LineFollowerOverlay extends StatelessWidget {
   final double? deviation;
   final bool isLeft;
   final bool isRight;
   final bool isCentered;
+  final bool isLineVisible;
+  final LinePosition linePosition;
 
   const LineFollowerOverlay({
     Key? key,
@@ -12,19 +15,9 @@ class LineFollowerOverlay extends StatelessWidget {
     required this.isLeft,
     required this.isRight,
     required this.isCentered,
+    required this.isLineVisible,
+    required this.linePosition,
   }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // Screen regions
-        _buildRegions(),
-        // Line follower box
-        if (deviation != null) _buildFollowerBox(),
-      ],
-    );
-  }
 
   Widget _buildRegions() {
     return Row(
@@ -161,5 +154,80 @@ class LineFollowerOverlay extends StatelessWidget {
     if (isLeft) return Icons.arrow_back;
     if (isRight) return Icons.arrow_forward;
     return Icons.warning_outlined;
+  }
+
+  Widget _buildStatusIndicator() {
+    String message;
+    Color color;
+    IconData icon;
+
+    switch (linePosition) {
+      case LinePosition.none:
+        message = "No Line";
+        color = Colors.red;
+        icon = Icons.error_outline;
+        break;
+      case LinePosition.enteringLeft:
+        message = "Line Entering Left";
+        color = Colors.orange;
+        icon = Icons.arrow_back;
+        break;
+      case LinePosition.enteringRight:
+        message = "Line Entering Right";
+        color = Colors.orange;
+        icon = Icons.arrow_forward;
+        break;
+      case LinePosition.leavingLeft:
+        message = "Line Leaving Left";
+        color = Colors.orange;
+        icon = Icons.arrow_back;
+        break;
+      case LinePosition.leavingRight:
+        message = "Line Leaving Right";
+        color = Colors.orange;
+        icon = Icons.arrow_forward;
+        break;
+      default:
+        message = "Line Detected";
+        color = Colors.green;
+        icon = Icons.check_circle_outline;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Text(
+            message,
+            style: TextStyle(color: color, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        _buildRegions(),
+        if (deviation != null) _buildFollowerBox(),
+        Positioned(
+          top: 40,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: _buildStatusIndicator(),
+          ),
+        ),
+      ],
+    );
   }
 }
