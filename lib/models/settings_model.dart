@@ -176,4 +176,42 @@ class SettingsModel extends ChangeNotifier {
   void initialize() {
     loadFromPreferences();
   }
+
+  /// Convert settings to a serializable map
+  Map<String, dynamic> toMap() {
+    return {
+      'sensitivity': _sensitivity,
+      'minLineWidth': _minLineWidth,
+      'luminanceThreshold': _luminanceThreshold,
+      'scanLines': _scanLines,
+      'lineColor': _lineColor.value,
+      'useAdaptiveThreshold': _useAdaptiveThreshold,
+      'showDebugView': _showDebugView,
+      'showLineHighlight': _showLineHighlight,
+      'contrastEnhancement': _contrastEnhancement,
+      'cannyThreshold1': _cannyThreshold1,
+      'cannyThreshold2': _cannyThreshold2,
+      'gaussianBlurSize': _gaussianBlurSize,
+      'guidanceCooldown': _guidanceCooldown,
+    };
+  }
+
+  /// Create settings from a map
+  static SettingsModel fromMap(Map<String, dynamic> map) {
+    return SettingsModel(
+      sensitivity: map['sensitivity'] ?? 30.0,
+      minLineWidth: map['minLineWidth'] ?? 15,
+      luminanceThreshold: map['luminanceThreshold'] ?? 80.0,
+      scanLines: map['scanLines'] ?? 30,
+      lineColor: Color(map['lineColor'] ?? Colors.black.value),
+      useAdaptiveThreshold: map['useAdaptiveThreshold'] ?? true,
+      showDebugView: map['showDebugView'] ?? true,
+      showLineHighlight: map['showLineHighlight'] ?? true,
+      contrastEnhancement: map['contrastEnhancement'] ?? 1.5,
+      cannyThreshold1: map['cannyThreshold1'] ?? 30.0,
+      cannyThreshold2: map['cannyThreshold2'] ?? 90.0,
+      gaussianBlurSize: map['gaussianBlurSize'] ?? 3,
+      guidanceCooldown: map['guidanceCooldown'] ?? 3,
+    );
+  }
 }

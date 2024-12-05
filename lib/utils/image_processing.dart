@@ -7,6 +7,7 @@ import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
 
 import '../models/settings_model.dart';
+import '../models/line_position.dart';
 
 class ImageProcessing {
   // Tracking variables
@@ -14,6 +15,12 @@ class ImageProcessing {
   static DateTime? _lastGuidanceTime;
   static bool _isLineStable = false;
   static double _lastConfidenceScore = 0.0;
+
+  // Add new constants for line detection
+  static const int REGION_THRESHOLD = 50;
+  static const double DIAGONAL_SLOPE_THRESHOLD = 0.5;
+  static const int MIN_LINE_LENGTH = 100;
+  static const int MAX_LINE_GAP = 10;
 
   /// Calculates the deviation of the line from center as a percentage
   static double calculateDeviation(int linePosition, int imageWidth) {
@@ -28,10 +35,9 @@ class ImageProcessing {
   /// Gets the current confidence score
   static double get confidenceScore => _lastConfidenceScore;
 
-  /// Converts CameraImage to [img.Image]
+  /// Converts CameraImage to img.Image
   static img.Image? convertCameraImage(CameraImage image) {
     try {
-      // Convert YUV420 to RGB
       final int width = image.width;
       final int height = image.height;
       final img.Image imgImage = img.Image(width: width, height: height);
@@ -124,67 +130,122 @@ class ImageProcessing {
     return thresholded;
   }
 
-  /// Enhanced line detection with improved preprocessing
+  /// Enhanced line detection with region awareness
   static Map<String, dynamic> detectLine(img.Image image, SettingsModel settings) {
     try {
-      // Reduce image size and convert to grayscale
-      var processImage = img.copyResize(
-        image,
-        width: image.width ~/ 2,
-        height: image.height ~/ 2,
-        interpolation: img.Interpolation.nearest,
-      );
-
-      // Apply Gaussian blur based on settings
-      processImage = _applyGaussianBlur(processImage, settings.gaussianBlurSize);
-
-      // Edge detection (Canny-like) using dynamic thresholds
+      // Convert and preprocess image
+      var processImage = _preprocessImage(image);
+      
+      // Detect edges with dynamic thresholds
       var edges = _detectEdges(processImage, settings);
-
-      // Detect left and right lanes using dynamic minLineWidth
-      var lanes = _detectLanes(edges, settings);
-
-      if (lanes == null || lanes['left'] == null || lanes['right'] == null) {
+      
+      // Find lines using modified Hough transform approach
+      var lines = _findLines(edges, settings);
+      
+      if (lines == null || lines.isEmpty) {
         return _createEmptyResult();
       }
 
-      // Calculate lane center and deviation
-      var deviation = _calculateLaneDeviation(
-        List<List<int>>.from(lanes['left']!),
-        List<List<int>>.from(lanes['right']!),
-        processImage.width,
-        settings,
-      );
+      // Analyze line positions and movement
+      var analysis = _analyzeLinesPosition(lines, processImage.width);
+      
+      // Ensure linePosition is never null
+      LinePosition linePosition = analysis['linePosition'] ?? LinePosition.unknown;
 
-      // Calculate guidance
-      var guidance = _calculateGuidance(deviation, settings);
-
-      // Create debug visualization if needed
-      Uint8List? debugImage;
-      if (settings.showDebugView) {
-        debugImage = createDebugImage(
-          image,
-          (processImage.width / 2 + deviation * processImage.width / 200).round(),
-          deviation,
-          settings,
-        );
-      }
-
+      // Calculate deviation and guidance
       return {
-        'deviation': deviation,
-        'isLeft': guidance['isLeft'],
-        'isRight': guidance['isRight'],
-        'isCentered': guidance['isCentered'],
+        'deviation': analysis['deviation'],
+        'isLeft': analysis['isLeft'],
+        'isRight': analysis['isRight'],
+        'isCentered': analysis['isCentered'],
         'isLineLost': false,
-        'isStable': _isLineStable,
-        'needsCorrection': guidance['needsCorrection'],
-        'guidance': guidance['message'],
-        'debugImage': debugImage,
+        'isStable': analysis['isStable'],
+        'needsCorrection': analysis['needsCorrection'],
+        'linePosition': linePosition,
+        'debugImage': settings.showDebugView ? 
+            _createDebugImage(processImage, lines, analysis) : null,
       };
     } catch (e) {
       print('Error in detectLine: $e');
       return _createEmptyResult();
     }
+  }
+
+  /// Analyze line positions and determine guidance
+  static Map<String, dynamic> _analyzeLinesPosition(List<List<int>> lines, int imageWidth) {
+    int regionWidth = imageWidth ~/ 3;
+    double? deviation;
+    bool isLeft = false;
+    bool isRight = false;
+    bool isCentered = false;
+    bool isStable = false;
+    bool needsCorrection = false;
+    LinePosition linePosition = LinePosition.unknown;
+
+    // Find dominant line (closest to center)
+    var dominantLine = _findDominantLine(lines, imageWidth);
+    if (dominantLine != null) {
+      // Calculate average X position
+      double avgX = (dominantLine[0] + dominantLine[2]) / 2;
+      
+      // Calculate deviation as percentage from center
+      deviation = ((avgX - imageWidth / 2) / (imageWidth / 2)) * 100;
+      
+      // Check if line is diagonal
+      double slope = (dominantLine[3] - dominantLine[1]).abs() / 
+                    (dominantLine[2] - dominantLine[0]).abs();
+                    
+      if (slope > DIAGONAL_SLOPE_THRESHOLD) {
+        // Handle diagonal line
+        linePosition = dominantLine[2] > dominantLine[0] ? 
+            LinePosition.enteringRight : LinePosition.enteringLeft;
+        needsCorrection = true;
+      } else {
+        // Determine region
+        if (avgX < regionWidth) {
+          isLeft = true;
+          linePosition = LinePosition.leavingLeft;
+        } else if (avgX > 2 * regionWidth) {
+          isRight = true;
+          linePosition = LinePosition.leavingRight;
+        } else {
+          isCentered = true;
+          linePosition = LinePosition.visible;
+          isStable = true;
+        }
+      }
+    }
+
+    return {
+      'deviation': deviation,
+      'isLeft': isLeft,
+      'isRight': isRight,
+      'isCentered': isCentered,
+      'isStable': isStable,
+      'needsCorrection': needsCorrection,
+      'linePosition': linePosition,
+    };
+  }
+
+  /// Find the dominant (most relevant) line
+  static List<int>? _findDominantLine(List<List<int>> lines, int imageWidth) {
+    if (lines.isEmpty) return null;
+    
+    int centerX = imageWidth ~/ 2;
+    List<int>? closestLine;
+    double minDistance = double.infinity;
+
+    for (var line in lines) {
+      double avgX = (line[0] + line[2]) / 2;
+      double distance = (avgX - centerX).abs();
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestLine = line;
+      }
+    }
+
+    return closestLine;
   }
 
   /// Apply Gaussian blur using dynamic kernel size from settings
@@ -214,20 +275,21 @@ class ImageProcessing {
 
   /// Detect edges using gradient-based approach with dynamic thresholds
   static img.Image _detectEdges(img.Image source, SettingsModel settings) {
-    var edges = img.Image(width: source.width, height: source.height);
-    int startY = (source.height * 2) ~/ 3; // Only process lower third
+    img.Image edges = img.Image(width: source.width, height: source.height);
+    int threshold = settings.sensitivity.round();
 
-    for (int y = startY + 1; y < source.height - 1; y++) {
+    // Only process the lower third of the image
+    int startY = (source.height * 2) ~/ 3;
+
+    for (int y = startY; y < source.height - 1; y++) {
       for (int x = 1; x < source.width - 1; x++) {
-        // Compute gradients
-        int gx = -getLuminance(source.getPixel(x - 1, y)) +
-            getLuminance(source.getPixel(x + 1, y));
-        int gy = -getLuminance(source.getPixel(x, y - 1)) +
-            getLuminance(source.getPixel(x, y + 1));
-
-        double magnitude = math.sqrt(gx * gx + gy * gy);
-
-        if (magnitude > settings.cannyThreshold1 && magnitude < settings.cannyThreshold2) {
+        // Simple edge detection using horizontal gradient
+        int pixel1 = getLuminance(source.getPixel(x - 1, y));
+        int pixel2 = getLuminance(source.getPixel(x + 1, y));
+        
+        int gradient = (pixel2 - pixel1).abs();
+        
+        if (gradient > threshold) {
           edges.setPixelRgba(x, y, 255, 255, 255, 255);
         } else {
           edges.setPixelRgba(x, y, 0, 0, 0, 255);
@@ -480,6 +542,192 @@ class ImageProcessing {
       return Uint8List.fromList(img.encodePng(debugImage));
     } catch (e) {
       print('Error creating debug image: $e');
+      return null;
+    }
+  }
+
+  /// Preprocess the image by applying Gaussian blur and converting to grayscale
+  static img.Image _preprocessImage(img.Image image) {
+    // Apply Gaussian blur to reduce noise
+    img.Image blurred = _applyGaussianBlur(image, 5);
+    // Convert to grayscale
+    img.Image grayscale = img.grayscale(blurred);
+    return grayscale;
+  }
+
+  /// Find lines using optimized Hough Transform
+  static List<List<int>> _findLines(img.Image edges, SettingsModel settings) {
+    List<List<int>> lines = [];
+    int width = edges.width;
+    int height = edges.height;
+    
+    // Only process the lower third of the image for better performance
+    int startY = (height * 2) ~/ 3;
+    int threshold = settings.sensitivity.round();
+
+    // Scan horizontal lines for vertical transitions
+    for (int y = startY; y < height; y += 2) { // Skip every other line for performance
+      List<int> transitions = [];
+      int lastPixel = getLuminance(edges.getPixel(0, y));
+      
+      for (int x = 1; x < width; x++) {
+        int pixel = getLuminance(edges.getPixel(x, y));
+        if ((lastPixel < threshold && pixel >= threshold) ||
+            (lastPixel >= threshold && pixel < threshold)) {
+          transitions.add(x);
+        }
+        lastPixel = pixel;
+      }
+
+      // If we found a potential line segment
+      if (transitions.length >= 2) {
+        for (int i = 0; i < transitions.length - 1; i++) {
+          int x1 = transitions[i];
+          int x2 = transitions[i + 1];
+          
+          // Check if the segment is long enough
+          if ((x2 - x1).abs() > MIN_LINE_LENGTH) {
+            lines.add([x1, y, x2, y]);
+          }
+        }
+      }
+    }
+
+    // Merge nearby lines
+    lines = _mergeNearbyLines(lines);
+
+    return lines;
+  }
+
+  /// Merge nearby line segments
+  static List<List<int>> _mergeNearbyLines(List<List<int>> lines) {
+    if (lines.isEmpty) return lines;
+    
+    List<List<int>> mergedLines = [];
+    List<bool> used = List.filled(lines.length, false);
+
+    for (int i = 0; i < lines.length; i++) {
+      if (used[i]) continue;
+
+      List<int> currentLine = List.from(lines[i]);
+      used[i] = true;
+
+      bool merged;
+      do {
+        merged = false;
+        for (int j = 0; j < lines.length; j++) {
+          if (used[j]) continue;
+
+          // Check if lines are close enough to merge
+          if (_shouldMergeLines(currentLine, lines[j])) {
+            currentLine = _mergeTwoLines(currentLine, lines[j]);
+            used[j] = true;
+            merged = true;
+          }
+        }
+      } while (merged);
+
+      mergedLines.add(currentLine);
+    }
+
+    return mergedLines;
+  }
+
+  /// Check if two lines should be merged
+  static bool _shouldMergeLines(List<int> line1, List<int> line2) {
+    // Lines should be close in Y coordinate
+    if ((line1[1] - line2[1]).abs() > MAX_LINE_GAP) return false;
+
+    // Check X coordinate overlap or proximity
+    int minX1 = math.min(line1[0], line1[2]);
+    int maxX1 = math.max(line1[0], line1[2]);
+    int minX2 = math.min(line2[0], line2[2]);
+    int maxX2 = math.max(line2[0], line2[2]);
+
+    // Check for overlap or small gap
+    return (minX1 <= maxX2 + MAX_LINE_GAP && maxX1 >= minX2 - MAX_LINE_GAP);
+  }
+
+  /// Merge two lines into one
+  static List<int> _mergeTwoLines(List<int> line1, List<int> line2) {
+    return [
+      math.min(line1[0], line2[0]),  // leftmost x
+      (line1[1] + line2[1]) ~/ 2,    // average y
+      math.max(line1[2], line2[2]),  // rightmost x
+      (line1[3] + line2[3]) ~/ 2,    // average y
+    ];
+  }
+
+  /// Create a debug image for visualization
+  static Uint8List? _createDebugImage(
+    img.Image sourceImage,
+    List<List<int>> lines,
+    Map<String, dynamic> analysis,
+  ) {
+    try {
+      // Create a smaller debug image for better performance
+      img.Image debugImage = img.copyResize(sourceImage, width: 240);
+
+      // Draw detected lines
+      for (var line in lines) {
+        int x1 = line[0];
+        int y1 = line[1];
+        int x2 = line[2];
+        int y2 = line[3];
+        img.drawLine(debugImage,y1:  y1, x2: x2, y2:y2 , x1: x1, color:  img.ColorRgb8(255, 0, 0));
+
+      }
+
+      // Draw center and boundaries
+      int centerX = debugImage.width ~/ 2;
+      double sensitivity = (analysis['deviation'] as double).abs().clamp(5.0, 50.0);
+      int zoneWidth = (debugImage.width * (sensitivity / 100)).round();
+
+      // Draw zones with semi-transparent fills
+      for (int y = 0; y < debugImage.height; y++) {
+        // Left zone
+        for (int x = 0; x < centerX - zoneWidth; x++) {
+          debugImage.setPixelRgba(x, y, 255, 0, 0, 40);
+        }
+        // Right zone
+        for (int x = centerX + zoneWidth; x < debugImage.width; x++) {
+          debugImage.setPixelRgba(x, y, 255, 0, 0, 40);
+        }
+        // Center zone
+        debugImage.setPixelRgba(centerX, y, 0, 255, 0, 180);
+      }
+
+      return Uint8List.fromList(img.encodePng(debugImage));
+    } catch (e) {
+      print('Error creating debug image: $e');
+      return null;
+    }
+  }
+
+  /// Convert serialized image data back to img.Image
+  static img.Image? convertFromImageData(Map<String, dynamic> imageData) {
+    try {
+      final width = imageData['width'] as int;
+      final height = imageData['height'] as int;
+      final planes = imageData['planes'] as List;
+      
+      // Create a new image
+      final img.Image image = img.Image(width: width, height: height);
+      
+      // Convert YUV to RGB using the first plane (Y)
+      final bytes = (planes[0] as Map)['bytes'] as Uint8List;
+      final bytesPerRow = (planes[0] as Map)['bytesPerRow'] as int;
+      
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final int value = bytes[y * bytesPerRow + x];
+          image.setPixelRgba(x, y, value, value, value, 255);
+        }
+      }
+      
+      return image;
+    } catch (e) {
+      print('Error converting image data: $e');
       return null;
     }
   }

@@ -10,16 +10,7 @@ import 'dart:ui';
 import 'dart:typed_data';
 import 'dart:isolate';
 import 'dart:math' as math;
-
-// Define the enum outside the class
-enum LinePosition {
-  none,
-  enteringLeft,
-  enteringRight,
-  visible,
-  leavingLeft,
-  leavingRight
-}
+import '../models/line_position.dart';
 
 class LineDetector with ChangeNotifier {
   CameraController? _cameraController;
@@ -35,7 +26,7 @@ class LineDetector with ChangeNotifier {
   bool _isProcessing = false;
 
   // Optimization constants
-  static const processingInterval = Duration(milliseconds: 30); // Increased to ~33 FPS
+  static const processingInterval = Duration(milliseconds: 50); // Reduced from 30ms to 50ms for better performance
   DateTime? _lastProcessingTime;
   Uint8List? _debugImageBytes;
 
@@ -58,7 +49,7 @@ class LineDetector with ChangeNotifier {
 
   // Add new states for line position tracking
   bool isLineVisible = false;
-  LinePosition linePosition = LinePosition.none;
+  LinePosition linePosition = LinePosition.unknown;
   
   // Add position tracking
   double? _lastDeviation;
@@ -84,7 +75,7 @@ class LineDetector with ChangeNotifier {
 
       _cameraController = CameraController(
         cameras.first,
-        ResolutionPreset.medium,
+        ResolutionPreset.low,
         imageFormatGroup: ImageFormatGroup.yuv420,
         enableAudio: false,
       );
@@ -97,7 +88,7 @@ class LineDetector with ChangeNotifier {
     }
   }
 
-  void _processImage(CameraImage image) async {
+  void _processImage(CameraImage image) {
     if (_isProcessing || (_lastProcessingTime != null && 
         DateTime.now().difference(_lastProcessingTime!) < processingInterval)) {
       return;
@@ -107,46 +98,33 @@ class LineDetector with ChangeNotifier {
     _lastProcessingTime = DateTime.now();
 
     try {
-      final result = await ImageProcessing.processImageInIsolate({
-        'image': image,
-        'settings': settings,
-      });
-
-      // Track line visibility changes
-      bool wasVisible = isLineVisible;
-      isLineVisible = result != null && !result['isLineLost'];
-      
-      if (isLineVisible) {
-        _lastLineSeenTime = DateTime.now();
-        _updateLinePosition(result!['deviation']);
-      } else if (wasVisible) {
-        // Line just disappeared - determine exit direction
-        if (_lastDeviation != null) {
-          linePosition = _lastDeviation! < 0 ? 
-              LinePosition.leavingLeft : 
-              LinePosition.leavingRight;
-          audioFeedback.playMessage(
-            "Line leaving to ${linePosition == LinePosition.leavingLeft ? 'left' : 'right'}"
-          );
-        }
-      } else if (_lastLineSeenTime != null && 
-          DateTime.now().difference(_lastLineSeenTime!) > lineTimeout) {
-        // Line completely lost
-        linePosition = LinePosition.none;
-        audioFeedback.playLineLost();
+      // Convert CameraImage to img.Image
+      final convertedImage = ImageProcessing.convertCameraImage(image);
+      if (convertedImage == null) {
+        print("Failed to convert CameraImage to img.Image");
+        return;
       }
 
-      // Update other states
+      // Process image directly
+      final result = ImageProcessing.detectLine(convertedImage, settings);
+
       if (result != null) {
         currentDeviation = result['deviation'];
-        _lastDeviation = currentDeviation;
         isLeft = result['isLeft'];
         isRight = result['isRight'];
         isCentered = result['isCentered'];
         isLineLost = result['isLineLost'];
-        this.isStable = _checkStability();
+        isStable = result['isStable'];
         needsCorrection = result['needsCorrection'];
+        
+        // Ensure linePosition is not null
+        linePosition = result['linePosition'] ?? LinePosition.unknown;
         _debugImageBytes = result['debugImage'];
+
+        // Handle audio feedback based on line position
+        _handleAudioFeedback();
+      } else {
+        print("Error: Result from detectLine is null");
       }
 
       notifyListeners();
@@ -154,6 +132,31 @@ class LineDetector with ChangeNotifier {
       print('Error in _processImage: $e');
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  void _handleAudioFeedback() {
+    if (linePosition != LinePosition.visible) {
+      String message = '';
+      switch (linePosition) {
+        case LinePosition.enteringLeft:
+          message = "Line entering from left";
+          break;
+        case LinePosition.enteringRight:
+          message = "Line entering from right";
+          break;
+        case LinePosition.leavingLeft:
+          message = "Line leaving to left";
+          break;
+        case LinePosition.leavingRight:
+          message = "Line leaving to right";
+          break;
+        default:
+          if (isLineLost) message = "Line lost";
+      }
+      if (message.isNotEmpty) {
+        audioFeedback.playMessage(message);
+      }
     }
   }
 

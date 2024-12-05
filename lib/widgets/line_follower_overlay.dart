@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/line_detector.dart';
+import '../models/line_position.dart';
 
 class LineFollowerOverlay extends StatelessWidget {
   final double? deviation;
@@ -162,7 +163,7 @@ class LineFollowerOverlay extends StatelessWidget {
     IconData icon;
 
     switch (linePosition) {
-      case LinePosition.none:
+      case LinePosition.unknown:
         message = "No Line";
         color = Colors.red;
         icon = Icons.error_outline;
