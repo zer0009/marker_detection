@@ -158,6 +158,16 @@ class LineDetector with ChangeNotifier {
         audioFeedback.playMessage(message);
       }
     }
+    audioFeedback.provideFeedback(
+      isLeft: isLeft,
+      isRight: isRight,
+      isCentered: isCentered,
+      isLineLost: isLineLost,
+      isStable: isStable,
+      needsCorrection: needsCorrection,
+      deviation: currentDeviation,
+      linePosition: linePosition,
+    );
   }
 
   void _updateLinePosition(double deviation) {

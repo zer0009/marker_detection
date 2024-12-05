@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
+import '../models/line_position.dart';
 import '../services/line_detector.dart';
 import '../models/settings_model.dart';
-import '../models/line_position.dart';
 import '../widgets/line_follower_overlay.dart';
 import 'line_detection_overlay.dart';
 

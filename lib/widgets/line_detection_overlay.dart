@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../models/line_position.dart';
+
 class LineDetectionOverlay extends StatelessWidget {
   final double? deviation;
   final bool isLineLost;
@@ -8,6 +10,8 @@ class LineDetectionOverlay extends StatelessWidget {
   final double lineWidth;
   final double? movementSpeed;
   final bool needsCorrection;
+  final double confidenceScore;
+  final LinePosition linePosition;
 
   const LineDetectionOverlay({
     Key? key,
@@ -18,6 +22,8 @@ class LineDetectionOverlay extends StatelessWidget {
     this.movementSpeed = 0,
     this.needsCorrection = false,
     this.lineWidth = 4.0,
+    this.confidenceScore = 0.0,
+    this.linePosition = LinePosition.unknown,
   }) : super(key: key);
 
   @override
@@ -39,10 +45,13 @@ class LineDetectionOverlay extends StatelessWidget {
             needsCorrection: needsCorrection,
             movementSpeed: movementSpeed ?? 0,
             imageSize: imageSize,
+            confidenceScore: confidenceScore,
+            linePositionState: this.linePosition,
           ),
         ),
         if (!isLineLost) _buildGuidanceArrows(context, linePosition),
         _buildDetectionZones(context),
+        _buildStatusOverlay(context),
       ],
     );
   }
@@ -99,6 +108,94 @@ class LineDetectionOverlay extends StatelessWidget {
     if (deviation > 10) return Colors.yellow;
     return Colors.green;
   }
+
+  Widget _buildStatusOverlay(BuildContext context) {
+    return Positioned(
+      top: 20,
+      left: 20,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildStatusRow('Confidence', confidenceScore),
+            _buildStatusRow('Stability', isStable ? 1.0 : 0.5),
+            _buildStatusRow('Speed', movementSpeed ?? 0),
+            Text(
+              'Status: ${_getStatusText()}',
+              style: TextStyle(
+                color: _getStatusColor(),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusRow(String label, double value) {
+    return Row(
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        Container(
+          width: 50,
+          height: 10,
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white24),
+            borderRadius: BorderRadius.circular(5),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(5),
+            child: LinearProgressIndicator(
+              value: value,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation<Color>(_getValueColor(value)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _getValueColor(double value) {
+    if (value > 0.8) return Colors.green;
+    if (value > 0.5) return Colors.yellow;
+    return Colors.orange;
+  }
+
+  String _getStatusText() {
+    switch (linePosition) {
+      case LinePosition.enteringLeft:
+        return 'Entering Left';
+      case LinePosition.enteringRight:
+        return 'Entering Right';
+      case LinePosition.leavingLeft:
+        return 'Leaving Left';
+      case LinePosition.leavingRight:
+        return 'Leaving Right';
+      case LinePosition.visible:
+        return isStable ? 'Stable' : 'Tracking';
+      case LinePosition.unknown:
+        return 'Searching';
+      default:
+        return 'Unknown';
+    }
+  }
+
+  Color _getStatusColor() {
+    if (isLineLost) return Colors.red;
+    if (isStable) return Colors.green;
+    if (needsCorrection) return Colors.orange;
+    return Colors.yellow;
+  }
 }
 
 class LineHighlightPainter extends CustomPainter {
@@ -109,6 +206,8 @@ class LineHighlightPainter extends CustomPainter {
   final bool needsCorrection;
   final double movementSpeed;
   final Size imageSize;
+  final double confidenceScore;
+  final LinePosition linePositionState;
 
   LineHighlightPainter({
     required this.linePosition,
@@ -118,6 +217,8 @@ class LineHighlightPainter extends CustomPainter {
     required this.needsCorrection,
     required this.movementSpeed,
     required this.imageSize,
+    required this.confidenceScore,
+    required this.linePositionState,
   });
 
   @override
@@ -127,6 +228,7 @@ class LineHighlightPainter extends CustomPainter {
     if (!isLost) {
       _drawStabilityIndicator(canvas, size);
       _drawConfidenceIndicator(canvas, size);
+      _drawLinePositionIndicator(canvas, size);
     }
     _drawSpeedIndicator(canvas, size);
   }
@@ -274,13 +376,67 @@ class LineHighlightPainter extends CustomPainter {
     return Colors.green;
   }
 
+  void _drawLinePositionIndicator(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = _getLinePositionColor()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    final double arrowSize = 20;
+    final double arrowY = size.height - 30;
+
+    switch (linePositionState) {
+      case LinePosition.enteringLeft:
+      case LinePosition.enteringRight:
+        _drawArrow(canvas, paint, size, arrowSize, arrowY, isEntering: true);
+        break;
+      case LinePosition.leavingLeft:
+      case LinePosition.leavingRight:
+        _drawArrow(canvas, paint, size, arrowSize, arrowY, isEntering: false);
+        break;
+      default:
+        break;
+    }
+  }
+
+  void _drawArrow(Canvas canvas, Paint paint, Size size, double arrowSize, double y, {required bool isEntering}) {
+    final path = Path();
+    if (isEntering) {
+      path.moveTo(linePosition - arrowSize, y - arrowSize);
+      path.lineTo(linePosition, y);
+      path.lineTo(linePosition + arrowSize, y - arrowSize);
+    } else {
+      path.moveTo(linePosition - arrowSize, y);
+      path.lineTo(linePosition, y + arrowSize);
+      path.lineTo(linePosition + arrowSize, y);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  Color _getLinePositionColor() {
+    switch (linePositionState) {
+      case LinePosition.enteringLeft:
+      case LinePosition.enteringRight:
+        return Colors.blue;
+      case LinePosition.leavingLeft:
+      case LinePosition.leavingRight:
+        return Colors.orange;
+      case LinePosition.visible:
+        return isStable ? Colors.green : Colors.yellow;
+      default:
+        return Colors.red;
+    }
+  }
+
   @override
   bool shouldRepaint(LineHighlightPainter oldDelegate) {
     return linePosition != oldDelegate.linePosition ||
            isLost != oldDelegate.isLost ||
            isStable != oldDelegate.isStable ||
            needsCorrection != oldDelegate.needsCorrection ||
-           movementSpeed != oldDelegate.movementSpeed;
+           movementSpeed != oldDelegate.movementSpeed ||
+           confidenceScore != oldDelegate.confidenceScore ||
+           linePositionState != oldDelegate.linePositionState;
   }
 }
 

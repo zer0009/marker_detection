@@ -2,6 +2,8 @@
 import 'package:flutter_tts/flutter_tts.dart';
 import 'dart:math' as math;
 
+import '../models/line_position.dart';
+
 class AudioFeedback {
   final FlutterTts _flutterTts = FlutterTts();
   DateTime? _lastMessageTime;
@@ -14,9 +16,9 @@ class AudioFeedback {
   static const Duration STABLE_COOLDOWN = Duration(milliseconds: 3000);
   
   // Deviation thresholds
-  static const double SLIGHT_DEVIATION = 10.0;
-  static const double MODERATE_DEVIATION = 25.0;
-  static const double SEVERE_DEVIATION = 40.0;
+  static const double SLIGHT_DEVIATION = 5.0;
+  static const double MODERATE_DEVIATION = 15.0;
+  static const double SEVERE_DEVIATION = 30.0;
 
   // State tracking
   bool _wasStable = false;
@@ -108,39 +110,70 @@ class AudioFeedback {
     required bool isStable,
     required bool needsCorrection,
     double? deviation,
+    LinePosition? linePosition,
   }) async {
     if (_isSpeaking) return;
 
     // Skip feedback if deviation hasn't changed significantly
     if (_lastDeviation != null && deviation != null) {
       double deviationDiff = (deviation - _lastDeviation!).abs();
-      if (deviationDiff < 5.0 && !isLineLost) return;
+      if (deviationDiff < 3.0 && !isLineLost) return;
     }
 
     String message = '';
     bool isUrgent = false;
     bool isPositive = false;
     
-    if (isLineLost) {
+    // Handle line position states first
+    if (linePosition != null) {
+      switch (linePosition) {
+        case LinePosition.enteringLeft:
+          message = "Line entering from left";
+          isUrgent = true;
+          break;
+        case LinePosition.enteringRight:
+          message = "Line entering from right";
+          isUrgent = true;
+          break;
+        case LinePosition.leavingLeft:
+          message = "Line leaving to left";
+          isUrgent = true;
+          break;
+        case LinePosition.leavingRight:
+          message = "Line leaving to right";
+          isUrgent = true;
+          break;
+        case LinePosition.visible:
+          // Handle deviation-based feedback
+          if (deviation != null) {
+            double deviationAbs = deviation.abs();
+            if (deviationAbs <= SLIGHT_DEVIATION) {
+              if (!_wasCentered) {
+                message = "Centered";
+                isPositive = true;
+              }
+            } else if (deviationAbs > SEVERE_DEVIATION) {
+              message = "Move ${deviation < 0 ? 'right' : 'left'} quickly";
+              isUrgent = true;
+            } else if (deviationAbs > MODERATE_DEVIATION) {
+              message = "Move ${deviation < 0 ? 'right' : 'left'}";
+              isUrgent = true;
+            } else {
+              message = "Slight ${deviation < 0 ? 'right' : 'left'}";
+            }
+          }
+          break;
+        case LinePosition.unknown:
+        default:
+          if (isLineLost) {
+            message = "Line lost";
+            isUrgent = true;
+          }
+          break;
+      }
+    } else if (isLineLost) {
       message = "Line lost";
       isUrgent = true;
-    } else if (deviation != null) {
-      double deviationAbs = deviation.abs();
-      
-      if (deviationAbs <= SLIGHT_DEVIATION) {
-        if (!_wasCentered) {
-          message = "Centered";
-          isPositive = true;
-        }
-      } else if (deviationAbs > SEVERE_DEVIATION) {
-        message = "Move ${deviation < 0 ? 'right' : 'left'} quickly";
-        isUrgent = true;
-      } else if (deviationAbs > MODERATE_DEVIATION) {
-        message = "Move ${deviation < 0 ? 'right' : 'left'}";
-        isUrgent = true;
-      } else {
-        message = "Slight ${deviation < 0 ? 'right' : 'left'}";
-      }
     }
 
     // Update state tracking

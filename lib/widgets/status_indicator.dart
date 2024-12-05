@@ -46,12 +46,6 @@ class StatusIndicator extends StatelessWidget {
               _buildStatusText(),
             ],
           ),
-          if (deviation != null) ...[
-            const SizedBox(height: 16),
-            _buildDeviationIndicator(),
-            const SizedBox(height: 8),
-            _buildDeviationLabel(),
-          ],
         ],
       ),
     );
@@ -120,88 +114,5 @@ class StatusIndicator extends StatelessWidget {
     if (isRight) return 'Adjust position leftward';
     if (isCentered) return 'Maintaining correct position';
     return 'Please stop and relocate the line';
-  }
-
-  Widget _buildDeviationIndicator() {
-    return Container(
-      height: 60,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Background track
-          Container(
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey[800],
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          // Center marker
-          Container(
-            width: 2,
-            height: 20,
-            color: Colors.grey[600],
-          ),
-          // Acceptable range indicators
-          ..._buildRangeIndicators(),
-          // Position indicator
-          if (deviation != null) _buildPositionIndicator(),
-        ],
-      ),
-    );
-  }
-
-  List<Widget> _buildRangeIndicators() {
-    return [
-      Positioned(
-        left: 85,
-        child: Container(
-          width: 2,
-          height: 12,
-          color: Colors.grey[600],
-        ),
-      ),
-      Positioned(
-        right: 85,
-        child: Container(
-          width: 2,
-          height: 12,
-          color: Colors.grey[600],
-        ),
-      ),
-    ];
-  }
-
-  Widget _buildPositionIndicator() {
-    final position = 100 + (deviation! * 100 / 50).clamp(-95.0, 95.0);
-    return Positioned(
-      left: position,
-      child: Container(
-        width: 20,
-        height: 20,
-        decoration: BoxDecoration(
-          color: _getStatusColor(),
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: _getStatusColor().withOpacity(0.5),
-              blurRadius: 8,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDeviationLabel() {
-    return Text(
-      deviation != null ? 'Deviation: ${deviation!.toStringAsFixed(1)}°' : '',
-      style: TextStyle(
-        color: Colors.grey[500],
-        fontSize: 12,
-      ),
-    );
   }
 }
