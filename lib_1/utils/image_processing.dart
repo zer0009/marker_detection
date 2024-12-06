@@ -12,10 +12,11 @@ class ImageProcessing {
   static double _lastConfidenceScore = 0.0;
 
   // Add new constants for line detection
-  static const int REGION_THRESHOLD = 50;
-  static const double DIAGONAL_SLOPE_THRESHOLD = 0.5;
-  static const int MIN_LINE_LENGTH = 100;
-  static const int MAX_LINE_GAP = 10;
+  static const int REGION_THRESHOLD = 30;
+  static const double DIAGONAL_SLOPE_THRESHOLD = 0.3;
+  static const int MIN_LINE_LENGTH = 80;
+  static const int MAX_LINE_GAP = 15;
+  static const int EDGE_DETECTION_WINDOW = 3;
 
   /// Calculates the deviation of the line from center as a percentage
   static double calculateDeviation(int linePosition, int imageWidth) {
@@ -268,36 +269,43 @@ class ImageProcessing {
     return blurred;
   }
 
-  /// Detect edges using gradient-based approach with dynamic thresholds
+  /// Improved edge detection using Sobel operator with higher thresholds
   static img.Image _detectEdges(img.Image source, SettingsModel settings) {
     img.Image edges = img.Image(width: source.width, height: source.height);
-    int threshold1 = settings.cannyThreshold1.round();
-    int threshold2 = settings.cannyThreshold2.round();
-
+    int threshold1 = settings.cannyThreshold1.round() + 20; // Increase threshold
+    int threshold2 = settings.cannyThreshold2.round() + 20; // Increase threshold
+    
     // Only process the lower third of the image
     int startY = (source.height * 2) ~/ 3;
 
-    for (int y = startY; y < source.height - 1; y++) {
-        for (int x = 1; x < source.width - 1; x++) {
-            // Use Canny edge detection thresholds
-            int pixel1 = getLuminance(source.getPixel(x - 1, y));
-            int pixel2 = getLuminance(source.getPixel(x + 1, y));
+    for (int y = startY + 1; y < source.height - 1; y++) {
+      for (int x = 1; x < source.width - 1; x++) {
+        // Sobel operators for better edge detection
+        int gx = -getLuminance(source.getPixel(x-1, y-1)) + 
+                 getLuminance(source.getPixel(x+1, y-1)) +
+                -2 * getLuminance(source.getPixel(x-1, y)) + 
+                 2 * getLuminance(source.getPixel(x+1, y)) +
+                -getLuminance(source.getPixel(x-1, y+1)) + 
+                 getLuminance(source.getPixel(x+1, y+1));
+                 
+        int gy = -getLuminance(source.getPixel(x-1, y-1)) + 
+                -2 * getLuminance(source.getPixel(x, y-1)) +
+                -getLuminance(source.getPixel(x+1, y-1)) +
+                 getLuminance(source.getPixel(x-1, y+1)) +
+                 2 * getLuminance(source.getPixel(x, y+1)) +
+                 getLuminance(source.getPixel(x+1, y+1));
 
-            int gradient = (pixel2 - pixel1).abs();
+        int gradient = math.sqrt(gx * gx + gy * gy).round();
 
-            if (gradient > threshold1 && gradient < threshold2) {
-                edges.setPixelRgba(x, y, 255, 255, 255, 255);
-            } else {
-                edges.setPixelRgba(x, y, 0, 0, 0, 255);
-            }
+        if (gradient > threshold1 && gradient < threshold2) {
+          edges.setPixelRgba(x, y, 255, 255, 255, 255);
+        } else {
+          edges.setPixelRgba(x, y, 0, 0, 0, 255);
         }
+      }
     }
-
     return edges;
   }
-
-
-
 
   /// Create an empty result when no lines are detected
   static Map<String, dynamic> _createEmptyResult() {
@@ -319,7 +327,6 @@ class ImageProcessing {
     _isLineStable = false;
     _lastConfidenceScore = 0.0;
   }
-
 
   /// Process image in isolate (if used)
   static Future<Map<String, dynamic>?> processImageInIsolate(Map<String, dynamic> params) async {
@@ -383,48 +390,55 @@ class ImageProcessing {
     return grayscale;
   }
 
-  /// Find lines using optimized Hough Transform
+  /// Improved line finding algorithm with additional validation
   static List<List<int>> _findLines(img.Image edges, SettingsModel settings) {
     List<List<int>> lines = [];
     int width = edges.width;
     int height = edges.height;
-
-    // Only process the lower third of the image for better performance
     int startY = (height * 2) ~/ 3;
     int threshold = settings.sensitivity.round();
-
-    // Scan horizontal lines for vertical transitions
-    for (int y = startY; y < height; y += 2) { // Skip every other line for performance
+    
+    // Scan with multiple angles for better line detection
+    for (int y = startY; y < height; y += 2) {
       List<int> transitions = [];
-      int lastPixel = getLuminance(edges.getPixel(0, y));
+      int consecutiveWhite = 0;
+      int lastTransition = -1;
 
-      for (int x = 1; x < width; x++) {
+      for (int x = 0; x < width; x++) {
         int pixel = getLuminance(edges.getPixel(x, y));
-        if ((lastPixel < threshold && pixel >= threshold) ||
-            (lastPixel >= threshold && pixel < threshold)) {
-          transitions.add(x);
+        
+        if (pixel >= threshold) {
+          consecutiveWhite++;
+          if (consecutiveWhite == 1) {
+            if (lastTransition == -1 || x - lastTransition > MIN_LINE_LENGTH) {
+              transitions.add(x);
+              lastTransition = x;
+            }
+          }
+        } else {
+          if (consecutiveWhite >= EDGE_DETECTION_WINDOW) {
+            transitions.add(x - 1);
+          }
+          consecutiveWhite = 0;
         }
-        lastPixel = pixel;
       }
 
-      // If we found a potential line segment
+      // Process transitions to find line segments
       if (transitions.length >= 2) {
-        for (int i = 0; i < transitions.length - 1; i++) {
-          int x1 = transitions[i];
-          int x2 = transitions[i + 1];
-
-          // Check if the segment is long enough
-          if ((x2 - x1).abs() > MIN_LINE_LENGTH) {
-            lines.add([x1, y, x2, y]);
+        for (int i = 0; i < transitions.length - 1; i += 2) {
+          int length = transitions[i + 1] - transitions[i];
+          if (length > MIN_LINE_LENGTH && length < width / 2) {
+            // Validate line slope
+            double slope = (y - y) / (transitions[i + 1] - transitions[i]).abs();
+            if (slope.abs() < DIAGONAL_SLOPE_THRESHOLD) {
+              lines.add([transitions[i], y, transitions[i + 1], y]);
+            }
           }
         }
       }
     }
 
-    // Merge nearby lines
-    lines = _mergeNearbyLines(lines);
-
-    return lines;
+    return _mergeNearbyLines(lines);
   }
 
   /// Merge nearby line segments

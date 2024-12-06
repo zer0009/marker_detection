@@ -1,91 +1,119 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'screens/home_screen.dart';
-import 'screens/settings_screen.dart';
-import 'services/line_detector.dart';
-import 'services/audio_feedback.dart';
-import 'models/settings_model.dart';
+import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
+import 'app.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  runApp(const BlindRunnerApp());
+void main() {
+  runApp(const AppLoader());
 }
 
-class BlindRunnerApp extends StatelessWidget {
-  const BlindRunnerApp({super.key});
+class AppLoader extends StatelessWidget {
+  const AppLoader({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider<SettingsModel>(
-          create: (_) => SettingsModel(),
-        ),
-        Provider<AudioFeedback>(
-          create: (_) => AudioFeedback(),
-        ),
-        ChangeNotifierProvider<LineDetector>(
-          create: (context) => LineDetector(
-            audioFeedback: context.read<AudioFeedback>(),
-            settings: context.read<SettingsModel>(),
-          ),
-        ),
-      ],
-      child: MaterialApp(
-        title: 'Blind Runner App',
-        theme: ThemeData(
-          primarySwatch: Colors.blue,
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: const Color(0xFF121212),
-          appBarTheme: const AppBarTheme(
-            elevation: 0,
-            backgroundColor: Color(0xFF121212),
-            centerTitle: true,
-            titleTextStyle: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.5,
-            ),
-          ),
-          elevatedButtonTheme: ElevatedButtonThemeData(
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 32,
-                vertical: 16,
-              ),
-              backgroundColor: Colors.blue[700],
-              foregroundColor: Colors.white,
-              textStyle: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              elevation: 8,
-              shadowColor: Colors.blue.withOpacity(0.5),
-            ),
-          ),
-          cardTheme: CardTheme(
-            elevation: 8,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            color: const Color(0xFF1E1E1E),
-          ),
-        ),
-        darkTheme: ThemeData.dark().copyWith(
-          scaffoldBackgroundColor: const Color(0xFF121212),
-        ),
-        themeMode: ThemeMode.dark,
-        initialRoute: '/',
-        routes: {
-          '/': (context) => const HomeScreen(),
-          '/settings': (context) => const SettingsScreen(),
+    return MaterialApp(
+      home: FutureBuilder<List<CameraDescription>>(
+        future: _initializeApp(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingScreen();
+          }
+
+          if (snapshot.hasError) {
+            return ErrorScreen(error: snapshot.error.toString());
+          }
+
+          final cameras = snapshot.data ?? [];
+          return LineDetectionApp(cameras: cameras);
         },
+      ),
+    );
+  }
+
+  Future<List<CameraDescription>> _initializeApp() async {
+    try {
+      WidgetsFlutterBinding.ensureInitialized();
+      
+      // Set preferred orientations
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
+
+      // Get available cameras
+      final cameras = await availableCameras();
+      return cameras;
+    } catch (e) {
+      debugPrint('Initialization error: $e');
+      return [];
+    }
+  }
+}
+
+class LoadingScreen extends StatelessWidget {
+  const LoadingScreen({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Initializing Camera...',
+              style: TextStyle(fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ErrorScreen extends StatelessWidget {
+  final String error;
+
+  const ErrorScreen({Key? key, required this.error}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                color: Colors.red,
+                size: 64,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Initialization Error',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => SystemNavigator.pop(),
+                child: const Text('Exit App'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
