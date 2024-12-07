@@ -1,10 +1,8 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../services/audio_feedback.dart';
 import '../utils/image_processing.dart';
 import '../models/settings_model.dart';
-import 'dart:typed_data';
 import 'dart:math' as math;
 import '../models/line_position.dart';
 
@@ -61,6 +59,10 @@ class LineDetector with ChangeNotifier {
   int _stableFrameCount = 0;
   int _lostFrameCount = 0;
   DateTime? _lastValidDetection;
+
+  // Add new property for confidence tracking
+  double _confidence = 0.0;
+  double get confidence => _confidence;
 
   LineDetector({required this.audioFeedback, required this.settings}) {
     // Initialize with starting message
@@ -124,13 +126,14 @@ class LineDetector with ChangeNotifier {
 
   void _processDetectionResult(Map<String, dynamic> result) {
     double? newDeviation = result['deviation'];
+    double confidence = result['confidence'] ?? 0.0;
     
-    if (newDeviation != null) {
-      // Validate deviation change
+    if (newDeviation != null && confidence > 0.3) {  // Only process results with decent confidence
       if (_isValidDeviationChange(newDeviation)) {
         _updateLineState(result, newDeviation);
         _lastValidDetection = DateTime.now();
         _lostFrameCount = 0;
+        _confidence = confidence;
       } else {
         _handleSuspiciousDetection();
       }
@@ -143,13 +146,16 @@ class LineDetector with ChangeNotifier {
     isRight = result['isRight'] ?? false;
     isCentered = result['isCentered'] ?? false;
     isLineLost = result['isLineLost'] ?? true;
-    isStable = _checkStability();
+    isStable = _checkStability() && confidence > 0.5;  // Require good confidence for stability
     needsCorrection = result['needsCorrection'] ?? false;
     linePosition = result['linePosition'] ?? LinePosition.unknown;
     _debugImageBytes = result['debugImage'];
 
-    // Handle audio feedback
-    _handleAudioFeedback();
+    // Update line visibility state
+    isLineVisible = linePosition == LinePosition.visible;
+
+    // Handle audio feedback with enhanced position information
+    _handleEnhancedAudioFeedback();
   }
 
   bool _isValidDeviationChange(double newDeviation) {
@@ -158,8 +164,15 @@ class LineDetector with ChangeNotifier {
     double lastDeviation = _deviationHistory.last;
     double change = (newDeviation - lastDeviation).abs();
     
-    // Check if change is within acceptable range
-    return change <= MAX_DEVIATION_CHANGE;
+    // More sophisticated change validation
+    if (change <= MAX_DEVIATION_CHANGE) {
+      return true;
+    } else if (_confidence > 0.7 && change <= MAX_DEVIATION_CHANGE * 1.5) {
+      // Allow slightly larger changes if confidence is high
+      return true;
+    }
+    
+    return false;
   }
 
   void _updateLineState(Map<String, dynamic> result, double newDeviation) {
@@ -171,8 +184,8 @@ class LineDetector with ChangeNotifier {
 
     currentDeviation = newDeviation;
 
-    // Update stability tracking
-    if (_isStableDeviation()) {
+    // Update stability tracking with confidence consideration
+    if (_isStableDeviation() && _confidence > 0.5) {
       _stableFrameCount++;
       if (_stableFrameCount >= MIN_STABLE_FRAMES) {
         isStable = true;
@@ -181,6 +194,10 @@ class LineDetector with ChangeNotifier {
       _stableFrameCount = 0;
       isStable = false;
     }
+
+    // Update line position tracking
+    _lastDeviation = newDeviation;
+    _lastLineSeenTime = DateTime.now();
   }
 
   bool _isStableDeviation() {
@@ -202,7 +219,6 @@ class LineDetector with ChangeNotifier {
       isStable = false;
       _stableFrameCount = 0;
       _deviationHistory.clear();
-      audioFeedback.playLineLost();
     }
   }
 
@@ -218,29 +234,49 @@ class LineDetector with ChangeNotifier {
     _handleInvalidFrame();
   }
 
-  void _handleAudioFeedback() {
+  void _handleEnhancedAudioFeedback() {
     if (isLineLost) {
-      if (_lostFrameCount == MAX_LOST_FRAMES) {
-        audioFeedback.playLineLost();
-      }
       return;
     }
 
-    if (isStable && isCentered) {
-      if (_stableFrameCount == MIN_STABLE_FRAMES) {
-        audioFeedback.playMessage("Centered", isPositive: true);
-      }
-    } else {
-      audioFeedback.provideFeedback(
-        isLeft: isLeft,
-        isRight: isRight,
-        isCentered: isCentered,
-        isLineLost: isLineLost,
-        isStable: isStable,
-        needsCorrection: needsCorrection,
-        deviation: currentDeviation,
-        linePosition: linePosition,
-      );
+    // Enhanced position-based feedback
+    switch (linePosition) {
+      case LinePosition.enteringLeft:
+        audioFeedback.playMessage("Line entering from left");
+        break;
+      case LinePosition.enteringRight:
+        audioFeedback.playMessage("Line entering from right");
+        break;
+      case LinePosition.leavingLeft:
+        audioFeedback.playMessage("Line moving left", isUrgent: true);
+        break;
+      case LinePosition.leavingRight:
+        audioFeedback.playMessage("Line moving right", isUrgent: true);
+        break;
+      case LinePosition.visible:
+        if (isStable && isCentered) {
+          if (_stableFrameCount == MIN_STABLE_FRAMES) {
+            audioFeedback.playMessage("Centered", isPositive: true);
+          }
+        } else {
+          audioFeedback.provideFeedback(
+            isLeft: isLeft,
+            isRight: isRight,
+            isCentered: isCentered,
+            isLineLost: isLineLost,
+            isStable: isStable,
+            needsCorrection: needsCorrection,
+            deviation: currentDeviation,
+            linePosition: linePosition,
+          );
+        }
+        break;
+      case LinePosition.unknown:
+        // Handle unknown state
+        if (!isLineLost) {
+          audioFeedback.playMessage("Uncertain position");
+        }
+        break;
     }
   }
 
@@ -279,7 +315,6 @@ class LineDetector with ChangeNotifier {
     isLineLost = true;
     isStable = false;
     needsCorrection = true;
-    audioFeedback.playLineLost();
   }
 
   void _handleLineDetected() {

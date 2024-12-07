@@ -38,7 +38,7 @@ class CameraService {
 
     _controller = CameraController(
       cameras[0],
-      ResolutionPreset.medium,
+      ResolutionPreset.low,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );

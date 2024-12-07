@@ -1,4 +1,4 @@
-// lib/screens/home_screen.dart
+// lib_2/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/line_detector.dart';

@@ -61,16 +61,22 @@ class LineDetectionService {
     double weightedSum = 0;
     double totalWeight = 0;
 
+    // Add noise reduction threshold
+    const minEdgeStrength = 30; // Ignore weak edges
+
     // Analyze only every other pixel for better performance
     for (int y = 0; y < height; y += 2) {
       for (int x = 0; x < width; x += 2) {
-        final weight = edges[y][x].toDouble();
-        weightedSum += x * weight;
-        totalWeight += weight;
+        final edgeStrength = edges[y][x].toDouble();
+        // Only consider strong edges
+        if (edgeStrength > minEdgeStrength) {
+          weightedSum += x * edgeStrength;
+          totalWeight += edgeStrength;
+        }
       }
     }
 
-    if (totalWeight == 0) return _lastKnownPosition;
+    if (totalWeight < minEdgeStrength * 10) return _lastKnownPosition; // Require minimum total edge strength
 
     // Calculate normalized position with smoothing
     final newPosition = (weightedSum / totalWeight) / width;
@@ -78,8 +84,13 @@ class LineDetectionService {
   }
 
   double _smoothPosition(double newPosition) {
-    // Apply exponential smoothing
-    const alpha = 0.3; // Smoothing factor
+    // Reduce smoothing factor for more responsive detection
+    const alpha = 0.4; // Increased from 0.3
+    // Add bounds checking
+    if ((newPosition - _lastKnownPosition).abs() > 0.3) {
+      // Large jump detected - use more aggressive smoothing
+      return 0.8 * _lastKnownPosition + 0.2 * newPosition;
+    }
     return alpha * newPosition + (1 - alpha) * _lastKnownPosition;
   }
 

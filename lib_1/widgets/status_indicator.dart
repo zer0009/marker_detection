@@ -1,4 +1,4 @@
-// lib/widgets/status_indicator.dart
+// lib_2/widgets/status_indicator.dart
 import 'package:flutter/material.dart';
 
 class StatusIndicator extends StatelessWidget {
